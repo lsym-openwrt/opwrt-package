@@ -1,0 +1,17 @@
+#!/bin/sh
+
+changed=0
+
+if ! uci -q get luci.themes.TechBlue >/dev/null 2>&1; then
+	uci set luci.themes.TechBlue='/luci-static/techblue'
+	changed=1
+fi
+
+uci set luci.main.mediaurlbase='/luci-static/techblue'
+changed=1
+
+if [ "$changed" = 1 ]; then
+	uci commit luci
+fi
+
+exit 0

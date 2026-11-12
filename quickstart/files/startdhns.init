@@ -1,0 +1,41 @@
+#!/bin/sh /etc/rc.common
+# Best-effort UCI notify after boot / network reload.
+# Bounded wait so we neither block boot for long nor depend on
+# background jobs that can be reaped when the init script exits.
+
+START=93
+USE_PROCD=1
+
+notify_when_ready() {
+	local i=0
+	# Revive at most once here; procd respawn and the quickstart boot hook
+	# already cover recovery, and repeated starts just pile up.
+	if ! pgrep -f "/usr/sbin/quickstart serve" >/dev/null 2>&1; then
+		[ -x /etc/init.d/quickstart ] && timeout 3 /etc/init.d/quickstart start >/dev/null 2>&1
+	fi
+	# Hard-capped: 3 tries x 2s timeout + 2s backoff (<= 13s incl. the single
+	# start attempt above). A stuck or slow daemon must never hold up rcS,
+	# otherwise every service with a higher START= (and every network
+	# reload, via the trigger below) stalls.
+	while [ "$i" -lt 3 ]; do
+		if timeout 2 /usr/sbin/quickstart uciChange 2>/dev/null | grep -q -e OK -e code:501; then
+			return 0
+		fi
+		i=$((i + 1))
+		[ "$i" -lt 3 ] && sleep 2
+	done
+	return 0
+}
+
+start_service() {
+	notify_when_ready
+}
+
+reload_service() {
+	start_service
+}
+
+service_triggers() {
+	procd_add_reload_trigger network
+	procd_add_reload_trigger quickstart
+}

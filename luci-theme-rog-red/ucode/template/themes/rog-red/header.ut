@@ -1,0 +1,248 @@
+{#
+ Copyright 2008 Steven Barth <steven@midlink.org>
+ Copyright 2012 David Menting <david@nut-bolt.nl>
+ Copyright 2008-2022 Jo-Philipp Wich <jo@mein.io>
+ Licensed to the public under the Apache License 2.0.
+
+ ROG-OS Theme (luci-theme-rog-red) - Modified Header
+#}
+
+{%
+	import { getuid, getspnam } from 'luci.core';
+
+	const boardinfo = ubus.call('system', 'board');
+
+	http.prepare_content('text/html; charset=UTF-8');
+-%}
+
+<!DOCTYPE html>
+<html lang="{{ dispatcher.lang }}">
+	<head>
+		<meta charset="utf-8">
+		<title>{{ striptags(`${boardinfo.hostname ?? '?'}${dispatched?.title ? ` | ${_(dispatched.title)}` : ''}`) }}</title>
+		<script>
+			(function() {
+				var rootElement = document.documentElement;
+
+				/* ROG-OS: 自动跟随系统亮暗(prefers-color-scheme) + 手动三态(自动/亮/暗)
+				 * 说明:ui 首次加载前就在此同步应用,避免亮/暗闪烁(FOUC)
+				 *      偏好保存在 localStorage(rog-theme-mode),选择“自动”则实时跟随系统 */
+				var THEME_KEY = 'rog-theme-mode';
+				var mql = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+
+				var readThemeMode = function() {
+					try {
+						var v = window.localStorage ? localStorage.getItem(THEME_KEY) : null;
+
+						if (v === 'light' || v === 'dark' || v === 'auto')
+							return v;
+					} catch (e) {}
+					return 'auto';
+				};
+
+				var themeIsDark = function(mode) {
+					return mode === 'dark' || (mode === 'auto' && (!mql || mql.matches));
+				};
+
+				var themeModeLabel = function(mode, dark) {
+					if (mode === 'auto')
+						return '自动 · 跟随系统(' + (dark ? '暗色' : '亮色') + ')';
+
+					return mode === 'dark' ? '暗色模式' : '亮色模式';
+				};
+
+				var syncThemeToggle = function(btn, mode, dark) {
+					if (!btn)
+						return;
+
+					var label = themeModeLabel(mode, dark);
+
+					btn.setAttribute('title', label + ' · 点击切换');
+					btn.setAttribute('aria-label', label + '，点击切换主题');
+					btn.setAttribute('data-mode', mode);
+				};
+
+				var applyThemeMode = function(mode) {
+					var dark = themeIsDark(mode);
+
+					rootElement.setAttribute('data-theme-mode', mode);
+					rootElement.setAttribute('data-darkmode', dark ? 'true' : 'false');
+					rootElement.setAttribute('data-mode', dark ? 'dark' : 'light');
+					rootElement.setAttribute('data-theme', 'rog-red');
+
+					var meta = document.querySelector('meta[name="theme-color"]');
+
+					if (meta)
+						meta.setAttribute('content', dark ? '#0A0A0A' : '#F1F2F5');
+
+					syncThemeToggle(document.getElementById('rog-theme-toggle'), mode, dark);
+
+					return dark;
+				};
+
+				var ensureThemeToggle = function() {
+					var btn = document.getElementById('rog-theme-toggle');
+
+					if (btn)
+						return btn;
+
+					var host = document.getElementById('indicators');
+
+					if (!host)
+						return null;
+
+					btn = document.createElement('button');
+					btn.id = 'rog-theme-toggle';
+					btn.className = 'rog-theme-toggle';
+					btn.type = 'button';
+					host.insertBefore(btn, host.firstChild);
+
+					return btn;
+				};
+
+				var bindThemeToggle = function() {
+					var btn = ensureThemeToggle();
+
+					if (!btn || btn.getAttribute('data-bound') === '1')
+						return;
+
+					btn.setAttribute('data-bound', '1');
+					btn.addEventListener('click', function() {
+						var order = ['auto', 'light', 'dark'];
+						var next = order[(order.indexOf(readThemeMode()) + 1) % 3];
+
+						try {
+							if (window.localStorage)
+								localStorage.setItem(THEME_KEY, next);
+						} catch (e) {}
+
+						applyThemeMode(next);
+					});
+
+					syncThemeToggle(btn, readThemeMode(), themeIsDark(readThemeMode()));
+				};
+
+				applyThemeMode(readThemeMode());
+
+				window.rogApplyTheme = applyThemeMode;
+				window.rogBindThemeToggle = bindThemeToggle;
+
+				/* 系统主题变化时,仅在“自动”模式下实时同步 */
+				var onSystemThemeChange = function() {
+					if (readThemeMode() === 'auto')
+						applyThemeMode('auto');
+				};
+
+				if (mql) {
+					if (mql.addEventListener)
+						mql.addEventListener('change', onSystemThemeChange);
+					else if (mql.addListener)
+						mql.addListener(onSystemThemeChange);
+				}
+
+				if (document.readyState === 'loading')
+					document.addEventListener('DOMContentLoaded', bindThemeToggle);
+				else
+					bindThemeToggle();
+
+				/* ROG 红色“败家之眼”favicon(内联 SVG data URI,零外部请求,与 logo.svg 同款图形)
+				 * 注意:颜色直接写字面 #,由 encodeURIComponent 统一编码,避免双重编码 */
+				var updateFavicon = function() {
+					var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><defs><radialGradient id="p" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#FF3B4E"/><stop offset="55%" stop-color="#FF0018"/><stop offset="100%" stop-color="#99000A"/></radialGradient></defs><circle cx="50" cy="50" r="50" fill="#0A0A0A"/><circle cx="50" cy="50" r="47" fill="none" stroke="#E60012" stroke-width="2"/><path d="M15 46 C15 24 32 10 50 10 C68 10 85 24 85 46 C85 60 70 68 50 68 C30 68 15 60 15 46 Z" fill="none" stroke="#FF0018" stroke-width="2.5" stroke-linecap="round"/><circle cx="50" cy="42" r="15" fill="url(#p)"/><circle cx="55" cy="37" r="4" fill="#FFFFFF" opacity="0.9"/></svg>',
+					    href = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+
+					document.querySelectorAll('link[rel="icon"]').forEach(function(link) {
+						if (link.href !== href) {
+							var newLink = link.cloneNode();
+							newLink.href = href;
+							link.parentNode.replaceChild(newLink, link);
+						}
+					});
+					document.querySelectorAll('img.rog-logo, img.asus-logo').forEach(function(img) {
+						if (img.src !== href) img.src = href;
+					});
+				};
+
+				window.rogUpdateFavicon = updateFavicon;
+
+				window.addEventListener('load', function() {
+					updateFavicon();
+					var observer = new MutationObserver(function(mutations) {
+						mutations.forEach(function(m) {
+							if (m.attributeName === 'data-theme') updateFavicon();
+						});
+					});
+					observer.observe(rootElement, { attributes: true, attributeFilter: ['data-theme'] });
+				});
+			})();
+		</script>
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<meta name="darkreader-lock">
+		<meta name="theme-color" content="#0A0A0A">
+		<!-- 无外部字体:ROG-OS 使用系统机甲字体栈,严禁 CDN 请求 -->
+		<link rel="stylesheet" href="{{ media }}/cascade.css?v=1.0.9">
+		<link rel="stylesheet" media="only screen and (max-device-width: 768px)" href="{{ media }}/mobile.css?v=1.0.0" />
+		<link rel="icon" href="{{ media }}/logo.svg" sizes="any">
+		{% if (node?.css): %}
+		<link rel="stylesheet" href="{{ resource }}/{{ node.css }}">
+		{% endif %}
+		{% if (css): %}
+		<style title="text/css">{{ css }}</style>
+		{% endif %}
+		<script src="{{ dispatcher.build_url('admin/translations', dispatcher.lang) }}"></script>
+		<script src="{{ resource }}/cbi.js"></script>
+	</head>
+
+	<body class="lang_{{ dispatcher.lang }} {{ entityencode(striptags(node?.title ?? ''), true) }}" data-page="{{ entityencode(join('-', ctx.request_path), true) }}">
+		{% if (!blank_page): %}
+		<header>
+			<button class="menu-btn" type="button" aria-label="{{ _('Toggle navigation menu') }}" aria-expanded="false">
+				<span></span>
+			</button>
+			<a class="brand" href="/" title="{{ striptags(boardinfo.hostname ?? '?') }}">
+				<img src="{{ media }}/logo.svg" alt="" class="rog-logo">
+				<span class="brand-text">WenWrt</span>
+			</a>
+			<!-- ROG 系统状态:CPU/内存红色细进度条(由 footer.ut 内联脚本轮询 system.info 填充) -->
+			<div id="rog-sysstat" class="pull-right" hidden>
+				<span class="rog-stat"><span class="rog-stat-label">CPU</span><span class="rog-stat-bar"><span class="rog-stat-fill" id="rog-cpu-fill"></span></span><span class="rog-stat-val" id="rog-cpu-val">--%</span></span>
+				<span class="rog-stat"><span class="rog-stat-label">MEM</span><span class="rog-stat-bar"><span class="rog-stat-fill" id="rog-mem-fill"></span></span><span class="rog-stat-val" id="rog-mem-val">--%</span></span>
+			</div>
+			<div id="indicators" class="pull-right"><button id="rog-theme-toggle" class="rog-theme-toggle" type="button" aria-label="{{ _('Toggle color scheme') }}"></button></div>
+		</header>
+
+		<aside class="sidebar" aria-label="{{ _('Navigation') }}">
+			<ul class="nav" id="topmenu" style="display:none"></ul>
+		</aside>
+		<div class="sidebar-overlay"></div>
+
+		<div id="maincontent" class="container">
+			{% if (getuid() == 0 && getspnam('root')?.pwdp === ''): %}
+				<div class="alert-message warning">
+					<h4>{{ _('No password set!') }}</h4>
+					<p>{{ _('There is no password set on this router. Please configure a root password to protect the web interface.') }}</p>
+					{% if (dispatcher.lookup("admin/system/admin")): %}
+					  <div class="right"><a class="btn" href="{{ dispatcher.build_url("admin/system/admin") }}">{{ _('Go to password configuration...') }}</a></div>
+					{% endif %}
+				</div>
+			{% endif %}
+
+			{% if (boardinfo.rootfs_type == "initramfs"): %}
+				<div class="alert-message warning">
+					<h4>{{ _('System running in recovery (initramfs) mode.') }}</h4>
+					<p>{{ _('No changes to settings will be stored and are lost after rebooting. This mode should only be used to install a firmware upgrade') }}</p>
+					{% if (dispatcher.lookup("admin/system/flash")): %}
+						<div class="right"><a class="btn" href="{{ dispatcher.build_url("admin/system/flash") }}">{{ _('Go to firmware upgrade...') }}</a></div>
+					{% endif %}
+				</div>
+			{% endif %}
+
+			<noscript>
+				<div class="alert-message warning">
+					<h4>{{ _('JavaScript required!') }}</h4>
+					<p>{{ _('You must enable JavaScript in your browser or LuCI will not work properly.') }}</p>
+				</div>
+			</noscript>
+
+			<div id="tabmenu" style="display:none"></div>
+		{% endif %}

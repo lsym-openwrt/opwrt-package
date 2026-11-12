@@ -1,0 +1,17 @@
+#!/bin/sh
+
+# 仅注册主题到 LuCI 主题列表(系统 -> 系统 -> 语言和界面 手动选择)
+# 注意:不设置 luci.main.mediaurlbase,避免安装后自动替换当前主题
+
+changed=0
+
+if ! uci -q get luci.themes.ROGRed >/dev/null 2>&1; then
+	uci set luci.themes.ROGRed='/luci-static/rog-red'
+	changed=1
+fi
+
+if [ "$changed" = 1 ]; then
+	uci commit luci
+fi
+
+exit 0

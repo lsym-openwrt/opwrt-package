@@ -1,0 +1,22 @@
+#!/bin/sh
+# Register the Carbon theme as an option in the theme selector.
+# It is NOT set as the default automatically; switch to it manually under
+# System -> System -> Language and Style (luci.main.mediaurlbase).
+
+changed=0
+
+if ! uci -q get luci.themes.Carbon >/dev/null 2>&1; then
+	uci set luci.themes.Carbon=/luci-static/carbon
+	changed=1
+fi
+
+[ "$changed" = 1 ] && uci commit luci
+
+# Updater settings (download mirror); kept across upgrades.
+[ -f /etc/config/carbon ] || touch /etc/config/carbon
+if ! uci -q get carbon.update >/dev/null 2>&1; then
+	uci set carbon.update=update
+	uci commit carbon
+fi
+
+exit 0

@@ -1,0 +1,80 @@
+		{% if (!blank_page): %}
+		</div>
+		<footer>
+			<span>
+				ROG-OS Theme /
+				Powered by
+				<a href="https://github.com/openwrt/luci" target="_blank" rel="noreferrer">
+					{{ version.luciname }} ({{ version.luciversion }})</a>
+				/
+				<a href="{{ entityencode(version.disturl ?? '#', true) }}" target="_blank" rel="noreferrer">
+					{{ version.distname }} {{ version.distversion }} ({{ version.distrevision }})</a>
+				{% if (lua_active): %}
+					/ {{ _('Lua compatibility mode active') }}
+				{% endif %}
+			</span>
+			<ul class="breadcrumb pull-right" id="modemenu" style="display:none"></ul>
+		</footer>
+		<script>L.require('menu-rog-red')</script>
+		<script>
+			/* ROG-OS 系统状态条:CPU/内存红色细进度条
+			 * 经 LuCI rpc 轮询 ubus system.info(5 秒一次,失败静默,保持低负载) */
+			(function() {
+				var el = document.getElementById('rog-sysstat');
+
+				if (!el)
+					return;
+
+				L.require('rpc').then(function(rpc) {
+					var sysinfo = rpc.declare({ object: 'system', method: 'info' });
+					/* 注意:CPU 核心数来自 system.cpuinfo(info 不含 cores 字段) */
+					var cpucount = rpc.declare({ object: 'system', method: 'cpuinfo' });
+					var fill = function(id, pct, valEl, suffix) {
+						var f = document.getElementById(id);
+
+						if (!f)
+							return;
+
+						if (!isFinite(pct))   /* load/内存数据缺失时兜底,避免显示 NaN% */
+							pct = 0;
+
+						pct = Math.max(0, Math.min(100, Math.round(pct)));
+						f.style.width = pct + '%';
+
+						if (valEl)
+							valEl.textContent = pct + suffix;
+					};
+
+					var poll = function() {
+						Promise.all([sysinfo(), cpucount()]).then(function(res) {
+							var info = res[0];
+							var cpu = res[1] || {};
+
+							if (!info)
+								return;
+
+							/* CPU 使用率 = 1 分钟负载 / CPU 核心数
+							 * 核心数双字段兼容:procd 标准字段为 cores,部分版本为 count */
+							var cores = (cpu && (cpu.cores || cpu.count)) ? (cpu.cores || cpu.count) : 1;
+							var load = (info.load && info.load[0]) ? info.load[0] : 0;
+							var cpuPct = (load / cores) * 100;
+
+							/* 内存使用率 = (total - free - cached - buffered) / total */
+							var mem = info.memory || { total: 1, free: 0, cached: 0, buffered: 0 };
+							var used = mem.total - mem.free - (mem.cached || 0) - (mem.buffered || 0);
+							var memPct = mem.total ? (used / mem.total) * 100 : 0;
+
+							fill('rog-cpu-fill', cpuPct, document.getElementById('rog-cpu-val'), '%');
+							fill('rog-mem-fill', memPct, document.getElementById('rog-mem-val'), '%');
+							el.hidden = false;
+						}).catch(function() { /* 权限或会话异常:保持隐藏,不影响页面 */ });
+					};
+
+					poll();
+					setInterval(poll, 5000);
+				});
+			})();
+		</script>
+		{% endif %}
+	</body>
+</html>

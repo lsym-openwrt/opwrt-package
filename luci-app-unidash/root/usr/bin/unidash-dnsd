@@ -1,0 +1,535 @@
+-- unidash-dnsd: 被动收集局域网 DNS 解析记录, 供 luci-app-unidash 实时显示访问网址
+--
+-- 工作模式 (启动时自动选择):
+--   tcpdump : 系统有 tcpdump 时, 抓取 DNS 应答, 建立 "解析IP <-> 域名 <-> 客户端" 精确映射
+--   logread : 否则解析 dnsmasq 查询日志 (需 dhcp.@dnsmasq[0].logqueries=1, install.sh 自动开启),
+--             记录 "客户端 -> 最近查询域名"
+-- 数据原子写入 /tmp/unidash_dns.json, 由 unidash 控制器读取并与 conntrack 连接做关联。
+
+local jsonc = nil
+do
+	local ok, j = pcall(require, "luci.jsonc")
+	if ok and j and type(j.parse) == "function" then
+		jsonc = j
+	end
+end
+
+local STATE     = "/tmp/unidash_dns.json"
+local STATE_TMP = "/tmp/unidash_dns.json.tmp"
+local MAX_IPMAP  = 1500   -- ip->域名 映射条数上限 (文件越小, 控制器每次解析越快)
+local MAX_TTL    = 86400  -- 映射有效期 (24小时, 覆盖长连接与 fake-ip 复用)
+local MAX_CLIENT = 60     -- 每客户端保留的最近查询条数
+local CLIENT_TTL = 1800   -- 客户端查询记录有效期 (秒)
+local WRITE_EVERY = 3     -- 状态落盘最小间隔 (秒), 与前端 3 秒轮询对齐
+local BEAT_EVERY  = 180   -- 心跳日志间隔 (秒), 避免频繁 fork logger
+
+local mode = "logread"
+local ipmap = {}   -- ip -> { d=域名, t=时间, c=客户端 }
+local cliq = {}    -- client -> { { d=域名, t=时间 }, ... }
+local txid = {}    -- DNS 事务ID -> { c=客户端, d=域名, t=时间 } (仅 tcpdump 模式)
+local dirty = false
+local last_write = 0
+local last_beat = 0
+
+local function now()
+	return os.time()
+end
+
+-- ------------------------------------------------ 轻量 JSON 编码 (与控制器一致的启发式)
+
+local function json_str(s)
+	s = tostring(s or "")
+	s = s:gsub("\\", "\\\\"):gsub('"', '\\"'):gsub("\n", "\\n"):gsub("\r", "\\r"):gsub("\t", "\\t")
+	s = s:gsub("%c", function(c) return string.format("\\u%04x", string.byte(c)) end)
+	return '"' .. s .. '"'
+end
+
+local function json_num(v)
+	if v ~= v or v == math.huge or v == -math.huge then return "0" end
+	if v == math.floor(v) and math.abs(v) < 9007199254740992 then
+		return string.format("%.0f", v)
+	end
+	return tostring(v)
+end
+
+local function json_enc(v)
+	local t = type(v)
+	if t == "nil" then return "null" end
+	if t == "boolean" then return v and "true" or "false" end
+	if t == "number" then return json_num(v) end
+	if t == "string" then return json_str(v) end
+	if t == "table" then
+		local n = #v
+		if n > 0 then
+			local isarr, count = true, 0
+			for k in pairs(v) do
+				count = count + 1
+				if type(k) ~= "number" or k < 1 or k > n or math.floor(k) ~= k then isarr = false end
+			end
+			if isarr and count == n then
+				local parts = {}
+				for i = 1, n do parts[i] = json_enc(v[i]) end
+				return "[" .. table.concat(parts, ",") .. "]"
+			end
+		end
+		local parts = {}
+		for k, val in pairs(v) do
+			if type(k) == "string" then
+				parts[#parts + 1] = json_str(k) .. ":" .. json_enc(val)
+			end
+		end
+		return "{" .. table.concat(parts, ",") .. "}"
+	end
+	return "null"
+end
+
+-- ------------------------------------------------ 状态维护
+
+local function prune()
+	local t = now()
+	for ip, e in pairs(ipmap) do
+		if t - (e.t or 0) > MAX_TTL then ipmap[ip] = nil end
+	end
+	local n = 0
+	for _ in pairs(ipmap) do n = n + 1 end
+	if n > MAX_IPMAP then
+		local list = {}
+		for ip, e in pairs(ipmap) do list[#list + 1] = { ip = ip, t = e.t or 0 } end
+		table.sort(list, function(a, b) return a.t > b.t end)
+		for i = MAX_IPMAP, #list do ipmap[list[i].ip] = nil end
+	end
+	for c, qs in pairs(cliq) do
+		local latest = 0
+		for _, q in ipairs(qs) do
+			if (q.t or 0) > latest then latest = q.t end
+		end
+		if t - latest > CLIENT_TTL then
+			cliq[c] = nil
+		else
+			while #qs > MAX_CLIENT do table.remove(qs, 1) end
+		end
+	end
+	for id, e in pairs(txid) do
+		if t - (e.t or 0) > 30 then txid[id] = nil end
+	end
+end
+
+local function write_state()
+	local clients = {}
+	for c, qs in pairs(cliq) do
+		local arr = {}
+		for _, q in ipairs(qs) do
+			arr[#arr + 1] = { d = q.d, t = q.t }
+		end
+		clients[c] = arr
+	end
+	local f = io.open(STATE_TMP, "w")
+	if not f then return end
+	f:write(json_enc({ mode = mode, ts = now(), ipmap = ipmap, clients = clients }))
+	f:close()
+	os.rename(STATE_TMP, STATE)
+end
+
+-- 前置声明: tick() 每捕获一行都会调用 poll_clash, 若此处不留 local,
+-- tick 体内会解析成全局名 (nil), 首行数据到达即报错退出, 导致"未采集"
+local poll_clash
+
+local function tick()
+	local t = now()
+	if poll_clash then poll_clash(t) end
+	-- 心跳: 定期记录采集计数, 便于 logread 排查 (间隔拉长, 少 fork 一次 logger)
+	if t - last_beat >= BEAT_EVERY then
+		last_beat = t
+		local n, m = 0, 0
+		for _ in pairs(ipmap) do n = n + 1 end
+		for _ in pairs(cliq) do m = m + 1 end
+		os.execute("logger -t unidash-dnsd 'ipmap=" .. n .. " clients=" .. m .. " mode=" .. mode .. "'")
+	end
+	if dirty and t - last_write >= WRITE_EVERY then
+		prune()
+		write_state()
+		last_write = t
+		dirty = false
+	end
+end
+
+local function add_client_query(client, domain, t)
+	local list = cliq[client]
+	if not list then
+		list = {}
+		cliq[client] = list
+	end
+	local last = list[#list]
+	if last and last.d == domain and (t - (last.t or 0)) < 10 then
+		last.t = t
+		dirty = true
+		return
+	end
+	list[#list + 1] = { d = domain, t = t }
+	dirty = true
+end
+
+-- ------------------------------------------------ Clash/Mihomo 连接 API (代理模式精确补全)
+-- 代理核心 (OpenClash/mihomo 等) 的本地连接 API 直接提供 每条连接的 域名+目标IP+来源终端,
+-- 覆盖 fake-ip 会话与 SNI 嗅探。轮询由启动时派生的独立后台循环执行 (写 /tmp/unidash_clash.json),
+-- 主循环只读该文件, 与抓包完全解耦。
+
+local last_clash_poll = 0
+
+local function apply_connections(text, t)
+	if not jsonc or not text or #text < 10 then return false end
+	local ok, j = pcall(jsonc.parse, text)
+	if not ok or type(j) ~= "table" or type(j.connections) ~= "table" then return false end
+	for _, c in ipairs(j.connections) do
+		local meta = c.metadata
+		if type(meta) == "table" then
+			local host = tostring(meta.host or "")
+			if host == "" then host = tostring(meta.sniffHost or "") end
+			local dip = tostring(meta.destinationIP or "")
+			local rip = tostring(meta.remoteDestination or "")
+			local client = tostring(meta.sourceIP or "")
+			if host ~= "" and host ~= dip then
+				if dip ~= "" and dip ~= "nil" then
+					ipmap[dip] = { d = host, t = t, c = client }
+					dirty = true
+				end
+				if rip ~= "" and rip ~= "nil" and rip ~= dip then
+					ipmap[rip] = { d = host, t = t, c = client }
+					dirty = true
+				end
+				if client ~= "" and client ~= "127.0.0.1" then
+					add_client_query(client, host, t)
+				end
+			end
+		end
+	end
+	return true
+end
+
+poll_clash = function(t)
+	if t - last_clash_poll < 3 then return end
+	last_clash_poll = t
+	-- 只读独立后台循环写入的文件 (绝不阻塞主循环)
+	local f = io.open("/tmp/unidash_clash.json", "r")
+	if f then
+		local text = f:read("*a") or ""
+		f:close()
+		if #text > 10 then
+			apply_connections(text, t)
+		end
+	end
+end
+
+local function ip4_of(s)
+	return s and s:match("^(%d+%.%d+%.%d+%.%d+)%.%d+$")
+end
+
+local function valid4(s)
+	return s and s:match("^%d+%.%d+%.%d+%.%d+$") ~= nil
+end
+
+-- 原始行写入系统日志 (单引号包裹并转义, 避免 tcpdump 行中的 > ( ) 等元字符破坏 shell 命令)
+local function log_raw(tag, line)
+	local s = tostring(line):gsub("%c", " "):gsub("'", "'\\''"):sub(1, 150)
+	os.execute("logger -t unidash-dnsd '" .. tag .. ": " .. s .. "'")
+end
+
+-- 拆 "地址.端口": 同时支持 IPv4 (1.2.3.4.53) 与 IPv6 (fdac::1.53)
+local function split_ep(s)
+	if not s then return nil end
+	local ip, port = s:match("^(.-)%.(%d+)$")
+	if ip and port and (valid4(ip) or ip:find(":", 1, true)) then
+		return ip, tonumber(port)
+	end
+	return nil
+end
+
+local function handle_tcpdump_line(line)
+	-- IPv4: "IP 1.2.3.4.53 > ..."   IPv6: "IP6 fdac::1.53 > ..." (局域网 DNS 常走 IPv6)
+	local pos = line:find(" IP6 ", 1, true)
+	local rest
+	if pos then
+		rest = line:sub(pos + 5)
+	else
+		pos = line:find(" IP ", 1, true)
+		if not pos then return end
+		rest = line:sub(pos + 4)
+	end
+	local src, dst, payload = rest:match("^(%S+) > (%S+): (.+)$")
+	if not payload then return end
+	local sip, spt = split_ep(src)
+	local dip, dpt = split_ep(dst)
+	if not sip or not dip or (spt ~= 53 and dpt ~= 53) then return end
+	local t = now()
+
+	-- 应答行优先: "59098 2/0/1 A 1.2.3.4 (56)" / "59098*- 3/0/0 CNAME x.com., A 1.2.3.4 (95)"
+	local rtx, answers = payload:match("^(%d+)%S*%s+%d+/%d+/%d+%s+(.+)$")
+	if rtx then
+		local e = txid[rtx]
+		txid[rtx] = nil
+		if not e or not e.d then return end
+		for ip in answers:gmatch("A ([%d%.]+)") do
+			if valid4(ip) then
+				ipmap[ip] = { d = e.d, t = t, c = e.c }
+				dirty = true
+			end
+		end
+		add_client_query(e.c, e.d, t)
+		return
+	end
+
+	-- 查询行: "59098+ A? www.example.com. (42)" / "59098+ [1au] A? www.baidu.com. (42)"
+	-- %S* 容忍 "+", "[1au]" 等 EDNS/标志标记; .* 容忍事务 ID 与域名之间的任意标记
+	local tx, qname = payload:match("^(%d+)%S*%s+.*[A-Z]+%? ([%w%.%-_]+)%.? ")
+	if tx and qname then
+		txid[tx] = { c = sip, d = (qname:gsub("%.+$", "")), t = t }
+	end
+end
+
+-- ------------------------------------------------ logread 模式
+
+local function handle_logread_line(line)
+	-- 查询行: dnsmasq[1]: query[A] www.baidu.com from 192.168.1.100
+	local dom, cli = line:match("query%[A%] (%S+) from ([%d%.]+)")
+	if dom and cli then
+		dom = dom:gsub("%.+$", "")
+		add_client_query(cli, dom, now())
+		return
+	end
+	-- 应答行: dnsmasq[1]: reply www.baidu.com is 110.242.68.66
+	-- (log-queries=extra 时前面会多出 "5 192.168.1.100/12345 ", 用 :match 不受影响)
+	-- 有了这条就能在无 tcpdump 的情况下也建立 域名 -> IP 精确映射
+	local rd, rip = line:match("reply (%S+) is (%d+%.%d+%.%d+%.%d+)")
+	if not rd then
+		rd, rip = line:match("cached (%S+) is (%d+%.%d+%.%d+%.%d+)")
+	end
+	if rd and rip and not rd:match("^%d+%.%d+%.%d+%.%d+$") then
+		ipmap[rip] = { d = (rd:gsub("%.+$", "")), t = now() }
+		dirty = true
+	end
+end
+
+-- ------------------------------------------------ TLS SNI 采集 (移植 kmod-fwx dpi_https_proto)
+-- 原版 fwx/src/fwx_main.c 在内核态扫描 ClientHello: 找 "00 00 00 XX" (server_name 扩展),
+-- HTTPS_LEN_OFFSET(7) 处取域名长度, HTTPS_URL_OFFSET(9) 处取域名, 4 < len <= 40, 字符集校验。
+-- 用户态复刻: tcpdump 只抓 443 端口 ClientHello 包 (-x 十六进制), 此处按相同偏移提取。
+
+local MIN_HOST_LEN = 4
+local MAX_HOST_LEN = 40
+
+local function sni_from_payload(p)
+	if #p < 16 then return nil end
+	if not (p:byte(1) == 0x16 and p:byte(2) == 0x03 and p:byte(6) == 0x01) then return nil end
+	local i = 1
+	while i + 9 <= #p do
+		if p:byte(i) == 0 and p:byte(i + 1) == 0 and p:byte(i + 2) == 0 and p:byte(i + 3) ~= 0 then
+			local len = p:byte(i + 7) * 256 + p:byte(i + 8)
+			if len > MIN_HOST_LEN and len <= MAX_HOST_LEN and i + 9 + len < #p then
+				local dom = p:sub(i + 9, i + 9 + len - 1)
+				if dom:match("^[%w%.%-:]+$") then
+					return dom
+				end
+			end
+		end
+		i = i + 1
+	end
+	return nil
+end
+
+-- 从 tcpdump -x 十六进制行拼出的完整包字节中提取载荷并解析 SNI
+-- v6 = true 时按 IPv6 固定 40 字节头解析 (局域网常直接走 IPv6 出网)
+local function sni_from_hex(hex, v6)
+	if not hex:byte(1) then return nil end
+	local l4, payload_start
+	if v6 then
+		l4 = 40
+		if #hex < l4 + 20 then return nil end
+		local doff = math.floor(hex:byte(l4 + 13) / 16) * 4
+		if doff < 20 then return nil end
+		payload_start = l4 + doff + 1
+	else
+		local ihl = (hex:byte(1) % 16) * 4
+		if ihl < 20 or #hex < ihl + 20 then return nil end
+		local doff = math.floor(hex:byte(ihl + 13) / 16) * 4
+		if doff < 20 then return nil end
+		payload_start = ihl + doff + 1
+	end
+	if #hex < payload_start + 16 then return nil end
+	if hex:byte(payload_start) ~= 0x16 then
+		for j = 1, math.min(#hex - 16, 80) do
+			if hex:byte(j) == 0x16 and hex:byte(j + 1) == 0x03 then
+				payload_start = j
+				break
+			end
+		end
+	end
+	return sni_from_payload(hex:sub(payload_start))
+end
+
+-- 合并抓包流的行分发: SNI 十六进制行 / 443 包头 / DNS 行
+local sni_buf = nil
+
+local function sni_flush(t)
+	if not sni_buf then return end
+	local b = sni_buf
+	sni_buf = nil
+	local hex = table.concat(b.buf or {})
+	if #hex < 60 then return end
+	local dom = sni_from_hex(hex, b.v6)
+	if dom then
+		ipmap[b.dst] = { d = dom, t = t or now(), c = b.src }
+		dirty = true
+		add_client_query(b.src, dom, t or now())
+	end
+end
+
+local function handle_capture_line(line, t)
+	local trimmed = line:match("^%s*(.-)%s*$") or ""
+	if sni_buf and trimmed:match("^0x%x+:%s+%x") then
+		local hexpart = trimmed:match("^0x%x+:%s+(.+)$") or ""
+		-- 逐字节拼进数组再一次性 concat: 原来对字符串反复 .. 是 O(n^2),
+		-- 抓包流量大时会持续吃满 CPU
+		local buf = sni_buf.buf
+		for hx in hexpart:gmatch("%x%x") do
+			buf[#buf + 1] = string.char(tonumber(hx, 16))
+		end
+		if #buf > 2048 then
+			sni_flush(t)
+		end
+		return
+	end
+	local pos = trimmed:find(" IP6 ", 1, true)
+	local v6 = true
+	if pos then
+		pos = pos + 5
+	else
+		v6 = false
+		pos = trimmed:find(" IP ", 1, true)
+		if pos then pos = pos + 4 end
+	end
+	if pos then
+		sni_flush(t)
+		local rest = trimmed:sub(pos)
+		local src, dst = rest:match("^(%S+) > (%S+):")
+		if src and dst then
+			local sip, spt = split_ep(src)
+			local dip, dpt = split_ep(dst)
+			if sip and dip and spt == 53 then
+				handle_tcpdump_line(line)
+				return
+			end
+			if sip and dip and dpt == 443 then
+				sni_buf = { src = sip, dst = dip, v6 = v6, buf = {} }
+				return
+			end
+		end
+		if trimmed:find(":53:", 1, true) or trimmed:find("%.53: ", 1, false) then
+			handle_tcpdump_line(line)
+		end
+	end
+end
+
+local function have(cmd)
+	local r = os.execute("command -v " .. cmd .. " >/dev/null 2>&1")
+	return r == 0 or r == true
+end
+
+local function lan_iface()
+	local iface = "br-lan"
+	if jsonc then
+		pcall(function()
+			local f = io.popen("ubus call network.interface.lan status 2>/dev/null")
+			if not f then return end
+			local out = f:read("*a") or ""
+			f:close()
+			local st = jsonc.parse(out)
+			if type(st) == "table" then
+				local dev = tostring(st.l3_device or st.device or "")
+				if dev ~= "" then iface = dev end
+			end
+		end)
+	end
+	return iface
+end
+
+-- Clash/Mihomo 连接 API 独立后台轮询 (每 3 秒, 仅写文件; 探测不到 API 时静默空转)
+-- 用 pid 文件保证只有一个轮询进程, 避免服务重启时越积越多
+local CLASH_PID = "/tmp/unidash_clash.pid"
+
+local function clash_loop_alive()
+	local f = io.open(CLASH_PID, "r")
+	if not f then return false end
+	local pid = (f:read("*l") or ""):match("%d+")
+	f:close()
+	if not pid then return false end
+	local r = os.execute("kill -0 " .. pid .. " >/dev/null 2>&1")
+	return r == 0 or r == true
+end
+
+local function ensure_clash_loop()
+	if clash_loop_alive() then return end
+	os.execute("sh -c 'echo $$ > " .. CLASH_PID .. "; while true; do wget -q -O /tmp/unidash_clash.tmp -T 3 http://127.0.0.1:9090/connections 2>/dev/null; [ -s /tmp/unidash_clash.tmp ] && mv /tmp/unidash_clash.tmp /tmp/unidash_clash.json; sleep 3; done' >/dev/null 2>&1 &")
+end
+
+local function run()
+	os.execute("logger -t unidash-dnsd started")
+	ensure_clash_loop()
+	local iface = lan_iface()
+	local use_tcpdump = have("tcpdump")
+
+	-- 先落盘一次: 仪表板据此显示采集模式, 不会一直停在"未采集"
+	mode = use_tcpdump and "tcpdump" or "logread"
+	write_state()
+
+	if use_tcpdump then
+		os.execute("logger -t unidash-dnsd 'capture mode on " .. iface .. " (dns + tls sni)'")
+		-- 单进程单管道: 合并过滤器 = 53 端口 DNS + 443 端口 TLS ClientHello, -x 十六进制输出
+		-- -s 512: 只要报文前 512 字节 (SNI 一定落在其中), 十六进制行数比 -s0 少一个数量级,
+		-- 弱路由上抓包 + 解析的 CPU 开销随之大幅下降
+		local filter = "udp port 53 or (tcp dst port 443 and (tcp[((tcp[12] & 0xf0) >> 2):4] = 0x160301 or tcp[((tcp[12] & 0xf0) >> 2):4] = 0x160302 or tcp[((tcp[12] & 0xf0) >> 2):4] = 0x160303))"
+		local pipe = io.popen("tcpdump -i " .. iface .. " -l -n -s 512 -x '" .. filter .. "' 2>/dev/null")
+		local raw_logged = 0
+		if pipe then
+			for line in pipe:lines() do
+				if raw_logged < 3 then
+					raw_logged = raw_logged + 1
+					log_raw("raw" .. raw_logged, line)
+				end
+				handle_capture_line(line)
+				tick()
+			end
+			pipe:close()
+		end
+		os.execute("logger -t unidash-dnsd 'capture exited, falling back to logread mode'")
+	end
+
+	mode = "logread"
+	if not use_tcpdump then
+		os.execute("logger -t unidash-dnsd 'logread mode; if no domains appear, set dhcp.logqueries=1'")
+	end
+	write_state()
+
+	-- logread 管道可能被意外关闭 (日志轮转/守护进程重启), 断开后重连而不是退出
+	local lraw = 0
+	while true do
+		local lp = io.popen("logread -f 2>/dev/null")
+		if not lp then
+			os.execute("sleep 10")
+		else
+			local got = false
+			for line in lp:lines() do
+				got = true
+				if lraw < 3 then
+					lraw = lraw + 1
+					log_raw("lograw" .. lraw, line)
+				end
+				handle_logread_line(line)
+				tick()
+			end
+			lp:close()
+			if not got then os.execute("sleep 10") end
+		end
+	end
+end
+
+run()

@@ -1,0 +1,218 @@
+{#
+ Copyright 2008 Steven Barth <steven@midlink.org>
+ Copyright 2012 David Menting <david@nut-bolt.nl>
+ Copyright 2008-2022 Jo-Philipp Wich <jo@mein.io>
+ Licensed to the public under the Apache License 2.0.
+
+ ASUS-Techno-Blue Theme - Modified Header
+#}
+
+{%
+	import { getuid, getspnam } from 'luci.core';
+
+	const boardinfo = ubus.call('system', 'board');
+
+	http.prepare_content('text/html; charset=UTF-8');
+-%}
+
+<!DOCTYPE html>
+<html lang="{{ dispatcher.lang }}">
+	<head>
+		<meta charset="utf-8">
+		<title>{{ striptags(`${boardinfo.hostname ?? '?'}${dispatched?.title ? ` | ${_(dispatched.title)}` : ''}`) }}</title>
+		<script>
+			(function() {
+				var rootElement = document.documentElement;
+
+				/* ASUS-Techno-Blue: dark/light scheme — follows the browser/OS by
+				   default ("auto"); a manual choice (light/dark) is remembered
+				   in localStorage and overrides the system setting. */
+				var colorSchemeQuery = window.matchMedia('(prefers-color-scheme: dark)');
+				var modeStorageKey = 'techblue-color-mode';
+
+				var readColorMode = function() {
+					var mode = null;
+
+					try { mode = window.localStorage.getItem(modeStorageKey); } catch (e) {}
+
+					return (mode === 'light' || mode === 'dark') ? mode : 'auto';
+				};
+
+				var colorMode = readColorMode();
+
+				var applyColorScheme = function(dark) {
+					rootElement.setAttribute('data-darkmode', dark ? 'true' : 'false');
+					rootElement.setAttribute('data-mode', dark ? 'dark' : 'light');
+
+					var themeColor = document.querySelector('meta[name="theme-color"]');
+
+					if (themeColor)
+						themeColor.setAttribute('content', dark ? '#0A0E27' : '#F4F7FC');
+				};
+
+				var syncColorMode = function() {
+					applyColorScheme(colorMode === 'auto'
+						? colorSchemeQuery.matches
+						: colorMode === 'dark');
+
+					var buttons = document.querySelectorAll('.theme-mode-btn');
+
+					for (var i = 0; i < buttons.length; i++) {
+						var active = buttons[i].getAttribute('data-mode') === colorMode;
+
+						buttons[i].classList.toggle('active', active);
+						buttons[i].setAttribute('aria-pressed', active ? 'true' : 'false');
+					}
+				};
+
+				var setColorMode = function(mode) {
+					colorMode = (mode === 'light' || mode === 'dark') ? mode : 'auto';
+
+					try {
+						if (colorMode === 'auto')
+							window.localStorage.removeItem(modeStorageKey);
+						else
+							window.localStorage.setItem(modeStorageKey, colorMode);
+					} catch (e) {}
+
+					rootElement.setAttribute('data-color-mode', colorMode);
+					syncColorMode();
+				};
+
+				rootElement.setAttribute('data-theme', 'technoblue');
+				rootElement.setAttribute('data-color-mode', colorMode);
+				syncColorMode();
+
+				var onColorSchemeChange = function(ev) {
+					if (colorMode === 'auto')
+						applyColorScheme(ev.matches);
+				};
+
+				if (colorSchemeQuery.addEventListener)
+					colorSchemeQuery.addEventListener('change', onColorSchemeChange);
+				else if (colorSchemeQuery.addListener)
+					colorSchemeQuery.addListener(onColorSchemeChange);
+
+				/* header switch: delegated click so it works regardless of render timing */
+				document.addEventListener('click', function(ev) {
+					var target = ev.target;
+
+					while (target && target.nodeType === 1) {
+						if (target.classList && target.classList.contains('theme-mode-btn')) {
+							setColorMode(target.getAttribute('data-mode'));
+							return;
+						}
+
+						target = target.parentNode;
+					}
+				});
+
+				document.addEventListener('DOMContentLoaded', syncColorMode);
+
+				var updateFavicon = function() {
+					var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="%230077B6"/><stop offset="50%" stop-color="%2300A8E8"/><stop offset="100%" stop-color="%2300F5FF"/></linearGradient></defs><circle cx="50" cy="50" r="44" fill="%230A0E27"/><circle cx="50" cy="50" r="48" fill="none" stroke="url(%23g)" stroke-width="1.5" opacity="0.6"/><path d="M32 52 C32 52 38 40 50 34 C62 40 68 52 68 52" fill="none" stroke="url(%23g)" stroke-width="2.5" stroke-linecap="round"/><path d="M38 48 C38 48 42 42 50 38 C58 42 62 48 62 48" fill="none" stroke="%2348CAE4" stroke-width="2" stroke-linecap="round"/><path d="M44 44 C44 44 47 41 50 40 C53 41 56 44 56 44" fill="none" stroke="%2390E0EF" stroke-width="1.8" stroke-linecap="round"/><circle cx="50" cy="50" r="2.5" fill="%2300F5FF"/><text x="50" y="78" text-anchor="middle" font-family="Exo 2,Inter,sans-serif" font-size="11" font-weight="700" fill="url(%23g)" letter-spacing="3">ASUS</text></svg>',
+					    href = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+
+					document.querySelectorAll('link[rel="icon"]').forEach(function(link) {
+						if (link.href !== href) {
+							var newLink = link.cloneNode();
+							newLink.href = href;
+							link.parentNode.replaceChild(newLink, link);
+						}
+					});
+					document.querySelectorAll('img.techblue-logo, img.asus-logo').forEach(function(img) {
+						if (img.src !== href) img.src = href;
+					});
+				};
+
+				window.techblueUpdateFavicon = updateFavicon;
+
+				window.addEventListener('load', function() {
+					updateFavicon();
+					syncColorMode();
+					var observer = new MutationObserver(function(mutations) {
+						mutations.forEach(function(m) {
+							if (m.attributeName === 'data-theme') updateFavicon();
+						});
+					});
+					observer.observe(rootElement, { attributes: true, attributeFilter: ['data-theme'] });
+				});
+			})();
+		</script>
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<meta name="darkreader-lock">
+		<meta name="theme-color" content="#0A0E27">
+		<!-- 性能优化:移除 Google Fonts 外链(渲染阻塞且国内访问不稳定),改用系统字体栈 -->
+		<link rel="stylesheet" href="{{ media }}/cascade.css?v=1.0.2">
+		<link rel="stylesheet" media="only screen and (max-device-width: 854px)" href="{{ media }}/mobile.css?v=1.0.0" />
+		<link rel="icon" href="{{ media }}/logo.svg" sizes="any">
+		{% if (node?.css): %}
+		<link rel="stylesheet" href="{{ resource }}/{{ node.css }}">
+		{% endif %}
+		{% if (css): %}
+		<style title="text/css">{{ css }}</style>
+		{% endif %}
+		<script src="{{ dispatcher.build_url('admin/translations', dispatcher.lang) }}"></script>
+		<script src="{{ resource }}/cbi.js"></script>
+	</head>
+
+	<body class="lang_{{ dispatcher.lang }} {{ entityencode(striptags(node?.title ?? ''), true) }}" data-page="{{ entityencode(join('-', ctx.request_path), true) }}">
+		{% if (!blank_page): %}
+		<header>
+			<button class="menu-btn" type="button" aria-label="{{ _('Toggle navigation menu') }}" aria-expanded="false">
+				<span></span>
+			</button>
+			<a class="brand" href="/">
+				<img src="{{ media }}/logo.svg" alt="" class="asus-logo">
+				{{ striptags(boardinfo.hostname ?? '?') }}
+			</a>
+			<div id="indicators" class="pull-right">
+				<div class="theme-mode-switch" role="group" aria-label="{{ _('Color scheme') }}">
+					<button type="button" class="theme-mode-btn" data-mode="auto" aria-pressed="true" aria-label="{{ _('Auto') }}" title="{{ _('Auto') }}">
+						<svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="8.5" stroke="currentColor" stroke-width="1.8"/><path d="M12 3.5a8.5 8.5 0 0 1 0 17z" fill="currentColor"/></svg>
+					</button>
+					<button type="button" class="theme-mode-btn" data-mode="light" aria-pressed="false" aria-label="{{ _('Light mode') }}" title="{{ _('Light mode') }}">
+						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6"/></svg>
+					</button>
+					<button type="button" class="theme-mode-btn" data-mode="dark" aria-pressed="false" aria-label="{{ _('Dark mode') }}" title="{{ _('Dark mode') }}">
+						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 13.2A8.6 8.6 0 1 1 10.8 3.5a6.7 6.7 0 0 0 9.7 9.7z"/></svg>
+					</button>
+				</div>
+			</div>
+		</header>
+
+		<aside class="sidebar" aria-label="{{ _('Navigation') }}">
+			<ul class="nav" id="topmenu" style="display:none"></ul>
+		</aside>
+		<div class="sidebar-overlay"></div>
+
+		<div id="maincontent" class="container">
+			{% if (getuid() == 0 && getspnam('root')?.pwdp === ''): %}
+				<div class="alert-message warning">
+					<h4>{{ _('No password set!') }}</h4>
+					<p>{{ _('There is no password set on this router. Please configure a root password to protect the web interface.') }}</p>
+					{% if (dispatcher.lookup("admin/system/admin")): %}
+					  <div class="right"><a class="btn" href="{{ dispatcher.build_url("admin/system/admin") }}">{{ _('Go to password configuration...') }}</a></div>
+					{% endif %}
+				</div>
+			{% endif %}
+
+			{% if (boardinfo.rootfs_type == "initramfs"): %}
+				<div class="alert-message warning">
+					<h4>{{ _('System running in recovery (initramfs) mode.') }}</h4>
+					<p>{{ _('No changes to settings will be stored and are lost after rebooting. This mode should only be used to install a firmware upgrade') }}</p>
+					{% if (dispatcher.lookup("admin/system/flash")): %}
+						<div class="right"><a class="btn" href="{{ dispatcher.build_url("admin/system/flash") }}">{{ _('Go to firmware upgrade...') }}</a></div>
+					{% endif %}
+				</div>
+			{% endif %}
+
+			<noscript>
+				<div class="alert-message warning">
+					<h4>{{ _('JavaScript required!') }}</h4>
+					<p>{{ _('You must enable JavaScript in your browser or LuCI will not work properly.') }}</p>
+				</div>
+			</noscript>
+
+			<div id="tabmenu" style="display:none"></div>
+		{% endif %}

@@ -1,0 +1,53 @@
+#!/bin/sh
+# unidash 一键诊断: 在路由器上运行 unidash-diag, 输出采集链路每一环的状态
+echo "===== unidash 诊断开始 ====="
+
+echo "--- [1] 依赖 ---"
+LUA_BIN=""
+for c in lua lua5.4 lua5.3 lua5.1; do
+    command -v "$c" >/dev/null 2>&1 && { LUA_BIN="$c"; break; }
+done
+[ -n "$LUA_BIN" ] && echo "lua 解释器: $LUA_BIN" || echo "lua 解释器: 缺失! (apk add lua / opkg install lua)"
+command -v tcpdump >/dev/null 2>&1 && echo "tcpdump: $(command -v tcpdump)" || echo "tcpdump: 缺失"
+if command -v opkg >/dev/null 2>&1; then
+    opkg list-installed 2>/dev/null | grep -E "^(luci-compat|lua|tcpdump)" || echo "(opkg 未查到相关包)"
+elif command -v apk >/dev/null 2>&1; then
+    apk info 2>/dev/null | grep -E "^(luci-compat|lua|tcpdump)" || echo "(apk 未查到相关包)"
+fi
+
+echo "--- [2] 采集服务 ---"
+/etc/init.d/unidash-dnsd enabled 2>/dev/null && echo "unidash-dnsd: 已启用" || echo "unidash-dnsd: 未启用!"
+ps w 2>/dev/null | grep "[u]nidash-dnsd" >/dev/null && echo "unidash-dnsd: 进程运行中" || echo "unidash-dnsd: 进程未运行!"
+ls -l /usr/bin/unidash-dnsd 2>/dev/null || echo "/usr/bin/unidash-dnsd 缺失!"
+
+echo "--- [3] 采集状态文件 ---"
+if [ -s /tmp/unidash_dns.json ]; then
+    ls -l /tmp/unidash_dns.json
+    head -c 400 /tmp/unidash_dns.json
+    echo
+else
+    echo "无 /tmp/unidash_dns.json (守护进程没有产生数据)"
+fi
+
+echo "--- [4] 守护进程最近日志 ---"
+logread 2>/dev/null | grep unidash-dnsd | tail -12
+
+echo "--- [5] 网口与路由 ---"
+ip -4 addr show br-lan 2>/dev/null | grep -E "br-lan|inet " || echo "无 br-lan"
+ip route show default 2>/dev/null | head -2
+
+echo "--- [6] Clash/Mihomo 连接 API ---"
+CLASH_HIT=0
+for p in 9090 9097 9095; do
+    R=$(wget -q -O - -T 2 "http://127.0.0.1:$p/version" 2>/dev/null)
+    if [ -n "$R" ]; then
+        echo "端口 $p: $R"
+        CLASH_HIT=1
+    fi
+done
+[ "$CLASH_HIT" = "0" ] && echo "未探测到 Clash/Mihomo API (9090/9097/9095)"
+
+echo "--- [7] dnsmasq 查询日志 ---"
+uci -q get dhcp.@dnsmasq[0].logqueries >/dev/null 2>&1 && echo "logqueries: 已开启" || echo "logqueries: 未开启"
+
+echo "===== unidash 诊断结束 (把以上全部内容发回) ====="

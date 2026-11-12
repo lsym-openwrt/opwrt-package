@@ -1,0 +1,51 @@
+# momo 订阅转换集成 —— 运行 / 自测环境
+#
+# 目标设备（OpenWrt 24.10+，在 momo/Makefile 的 DEPENDS 中声明）
+#   +python3-light   必须。提供 /usr/bin/python3 以及 json/base64/re/ipaddress/
+#                    subprocess/tempfile/argparse 等标准库模块。
+#                    注意：python3-base 只含解释器与最小启动集，不含上述模块，不能用。
+#                    转换器不依赖 urllib（OpenWrt 将其拆为独立包 python3-urllib），
+#                    已内置轻量 URI/percent-decode 实现，因此无需额外 Python 分包。
+#   +sing-box        已有依赖，需 1.14+（模板与生成配置按 1.14 字段校验）。
+#   +curl            已有依赖。分组驱动 momo_groupd.py 用它访问 sing-box Clash API
+#                    （GET /proxies、GET /group/<g>/delay、GET /proxies/<n>/delay、
+#                     PUT /proxies/<g>），因此不引入 python3-urllib / python3-http 分包。
+#                    转换器也用它对 4 个规则集镜像做真实下载测速（curl -r 0-81919）。
+#   其余依赖（firewall4 / ucode / jsonfilter / nft / ip-full ...）沿用 momo 原值。
+#
+# 分组驱动运行时（momo 1.1.0 新增）
+#   /var/run/momo/groups.json        转换器写出的订阅分组规则（tmpfs，重启重建）
+#   /var/run/momo/group_state.json   手动选择偏好 / 测速缓存 / 轮询指针
+#   /var/run/momo/groupd.pid         守护进程 pid
+#   Clash API 地址：优先最终配置 experimental.clash_api.external_controller；
+#   缺省时转换器注入 127.0.0.1:9090（仅本地回环，可用 MOMO_CONVERTER_CLASH_API 改）。
+#
+# 远程规则集镜像测速选源（momo 1.2.0 新增，仅改 momo_convert.py）
+#   转换订阅时对 4 个镜像并行 curl -r 0-81919 下载 geosite-cn.srs 前 80KB，
+#   用 curl time_total（含连接+TLS+传输）算有效 KB/s：按耗时排序 -> 80KB/s 硬阈值
+#   淘汰 -> 选第一个达标的最快源；全部不达标取最快实测源；全部失败保底 gh-proxy。
+#   geosite/geoip 两条 route.rule_set 都写选中镜像（jsdelivr 系推导 @rule-set 路径），
+#   并写入顶层 http_clients / rule_set[].http_client（1.14+ 原生写法）。
+#   全失败（离线）时默认不新增也不改写远程规则集——实测 1.14.4 对不可达 rule_set
+#   会 FATAL 启动失败；需强制写入保底 gh-proxy 可设 MOMO_CONVERTER_RULESET_FORCE=1。
+#   可覆盖项（环境变量，或写入 /etc/momo/converter/converter.conf 同名键）：
+#     MOMO_CONVERTER_RULESET=1            总开关（0 关闭，回归测试默认关闭）
+#     MOMO_CONVERTER_RULESET_MIN_SPEED=80 硬阈值 KB/s
+#     MOMO_CONVERTER_RULESET_TIMEOUT=8    每探测超时上限（秒）
+#     MOMO_CONVERTER_RULESET_CURL=curl    curl 命令（自测可换成桩）
+#     MOMO_CONVERTER_RULESET_INJECT=1     是否补齐 geosite/geoip 两条规则集
+#     MOMO_CONVERTER_RULESET_FORCE=0      离线时是否强制写入保底 gh-proxy
+#   新增能力不改动 momo.init / include.sh / Makefile / convert.sh / groupd.sh /
+#   converter.conf / momo-base.json / UCI / LuCI；原生 sing-box JSON 仍严格透传。
+#
+# 开发机自测（无需任何第三方 Python 包）
+#   Python >= 3.8（仅标准库）
+#   POSIX shell（Linux bash / macOS sh / Windows Git Bash）
+#   可选：sing-box 1.14+ 可执行文件，用于真实 `sing-box check` 校验生成配置。
+#         通过环境变量 SING_BOX_BIN 指定；或放在临时目录下的 momo-test/bin/sing-box.exe。
+#         未提供时自动退化为 JSON 结构校验，测试仍可运行。
+#
+# 运行自测
+#   python tests/run_tests.py
+# 输出
+#   tests/results.json

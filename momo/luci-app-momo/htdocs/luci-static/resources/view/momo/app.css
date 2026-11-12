@@ -1,0 +1,513 @@
+/*
+ * MomoX 面板样式
+ * 主题：tools/momo.js 读取 body 背景亮度，写入 html[data-mx="light|dark"]
+ * 只处理「卡片 / 页头 / 间距 / 配色」，控件外观交还主题，
+ * 避免破坏动态列表（访问控制）与订阅表格这类复杂控件。
+ */
+
+:root {
+	--mx-accent: var(--primary, #10b981);
+	--mx-radius: 14px;
+	--mx-radius-sm: 10px;
+}
+
+:root[data-mx="light"] {
+	--mx-card: #ffffff;
+	/* 边框：卡片外轮廓 */
+	--mx-line: rgba(17, 24, 39, .10);
+	/* 细线：行分隔、页脚分隔，比轮廓再淡一档 */
+	--mx-line-soft: rgba(17, 24, 39, .065);
+	/* 高光：卡片顶部一条内描边，制造轻微凸起 */
+	--mx-hairline: rgba(255, 255, 255, .95);
+	--mx-shadow: 0 1px 2px rgba(16, 24, 40, .045), 0 4px 10px -6px rgba(16, 24, 40, .06);
+	--mx-text: #1f2024;
+	--mx-text-2: #5f646c;
+	--mx-text-3: #86898f;
+	--mx-th: rgba(17, 24, 39, .035);
+	--mx-ok: #17864a;
+	--mx-ok-soft: #e8f6ee;
+	--mx-ok-line: rgba(23, 134, 74, .24);
+	--mx-bad: #c8322f;
+	--mx-bad-soft: #fdecec;
+	--mx-bad-line: rgba(200, 50, 47, .22);
+	--mx-ghost: rgba(17, 24, 39, .045);
+}
+
+:root[data-mx="dark"] {
+	--mx-card: #24282f;
+	--mx-line: rgba(255, 255, 255, .105);
+	--mx-line-soft: rgba(255, 255, 255, .075);
+	--mx-hairline: rgba(255, 255, 255, .06);
+	/* 暗色下阴影等于隐形，靠卡片比页面底色亮来分层；
+	   这里必须给一个零尺寸透明阴影而不是 none，
+	   否则 box-shadow: inset ..., none 整条声明会被判为非法丢弃 */
+	--mx-shadow: 0 0 0 0 rgba(0, 0, 0, 0);
+	--mx-text: #e6e8ec;
+	--mx-text-2: #a6abb5;
+	--mx-text-3: #878c96;
+	/* 卡片头要比卡片本体亮一档，否则上下分不出层级 */
+	--mx-th: rgba(255, 255, 255, .045);
+	--mx-ok: #5fd68f;
+	--mx-ok-soft: #17301f;
+	--mx-ok-line: rgba(95, 214, 143, .30);
+	--mx-bad: #ff8f8f;
+	--mx-bad-soft: #35191a;
+	--mx-bad-line: rgba(255, 143, 143, .30);
+	--mx-ghost: rgba(255, 255, 255, .06);
+}
+
+/* ── 页头 ───────────────────────────────────────────── */
+
+/* 有顶部卡片的页面（插件配置）由卡片自己渲染标题与说明 */
+#cbi-momo:has(.mx-hero) > h2,
+#cbi-momo:has(.mx-hero) > .cbi-map-descr {
+	display: none !important;
+}
+
+/* 其余页面保留主题标题，只统一字号与颜色 */
+#cbi-momo > h2 {
+	margin: 0 0 4px;
+	padding: 0;
+	/* argon 给 h2 带绿色下划线，这里必须用 !important 才压得住 */
+	border: 0 !important;
+	background: transparent !important;
+	box-shadow: none !important;
+	font-size: 19px;
+	font-weight: 600;
+	letter-spacing: -.01em;
+	line-height: 1.35;
+	color: var(--mx-text);
+}
+
+#cbi-momo > .cbi-map-descr {
+	margin: 0 0 14px;
+	padding: 0;
+	border: 0 !important;
+	background: transparent !important;
+	font-size: 12.5px;
+	font-weight: 400;
+	line-height: 1.6;
+	color: var(--mx-text-2);
+}
+
+#cbi-momo > .cbi-map-descr a {
+	color: var(--mx-accent);
+	text-decoration: none;
+}
+
+/* ── 卡片 ───────────────────────────────────────────── */
+
+#cbi-momo > .cbi-section {
+	width: 100%;
+	box-sizing: border-box;
+	margin: 0 0 14px;
+	padding: 0;
+	border: 1px solid var(--mx-line) !important;
+	border-radius: var(--mx-radius) !important;
+	background: var(--mx-card) !important;
+	/* 顶部内高光 + 极浅外阴影：亮色有层次，暗色不脏 */
+	box-shadow: inset 0 1px 0 var(--mx-hairline), var(--mx-shadow) !important;
+	overflow: hidden;
+}
+
+/* 卡片头：底部分隔线 + 左侧 3px 主色标记
+ * LuCI 26 的 Section 标题是 <h3>（form.js: sectionEl.appendChild(E('h3',...))），
+ * 不是 <legend>；argon 另有 `.cbi-section > legend { display:none !important }`。
+ * 两者都写上，老版本也不会漏。
+ * 注意：fieldset>legend 上绝对定位伪元素的基准是 fieldset，所以色条用 border-left。 */
+
+#cbi-momo > .cbi-section > h3,
+#cbi-momo > .cbi-section > legend {
+	display: block !important;
+	float: none;
+	width: 100%;
+	box-sizing: border-box;
+	margin: 0;
+	padding: 12px 18px 12px 15px;
+	border: 0;
+	border-left: 3px solid var(--mx-accent);
+	border-bottom: 1px solid var(--mx-line);
+	background: var(--mx-th);
+	color: var(--mx-text);
+	font-size: 14px;
+	font-weight: 600;
+	line-height: 1.45;
+	letter-spacing: -.005em;
+	text-transform: none;
+}
+
+/* 卡片头下方的一行说明 */
+#cbi-momo > .cbi-section > .cbi-section-descr {
+	margin: 0;
+	padding: 9px 18px;
+	border-bottom: 1px solid var(--mx-line-soft);
+	background: var(--mx-th);
+	color: var(--mx-text-3);
+	font-size: 11.5px;
+	line-height: 1.6;
+}
+
+/* 卡片头文字里的说明（部分页面 legend 带「(xxx)」小字） */
+#cbi-momo > .cbi-section > legend small,
+#cbi-momo > .cbi-section > legend .cbi-section-descr {
+	color: var(--mx-text-3);
+	font-size: 11.5px;
+	font-weight: 400;
+}
+
+#cbi-momo > .cbi-section > .cbi-section-node {
+	box-sizing: border-box;
+	width: 100%;
+}
+
+/* 卡片里嵌套的小卡不再叠加边框，避免多层描边 */
+#cbi-momo > .cbi-section .cbi-section {
+	border: 0 !important;
+	border-radius: 0 !important;
+	margin: 0 !important;
+	background: transparent !important;
+	box-shadow: none !important;
+}
+
+/* 嵌套分组的小标题：去掉第二层描边，只留一行灰字 */
+#cbi-momo > .cbi-section .cbi-section > h3,
+#cbi-momo > .cbi-section .cbi-section > legend {
+	padding: 14px 18px 6px;
+	border: 0 !important;
+	background: transparent !important;
+	color: var(--mx-text-3);
+	font-size: 11.5px;
+	font-weight: 600;
+	letter-spacing: .04em;
+	text-transform: uppercase;
+}
+
+/* ── 行分隔线 ───────────────────────────────────────────
+ * 只作用于 section-node 的直接子级 .cbi-value，
+ * GridSection 单元格与动态列表内部的 .cbi-value 不在这一层，
+ * 因此不会被压扁或画错线。
+ * 顶部卡片（含 .mx-hero 的段）整段排除，否则会在按钮之间画线。
+ */
+
+#cbi-momo > .cbi-section:not(:has(.mx-hero)) > .cbi-section-node > * + .cbi-value {
+	border-top: 1px solid var(--mx-line-soft);
+}
+
+/* 最后一行不再收线，避免和卡片底部边框贴成双线 */
+#cbi-momo > .cbi-section > .cbi-section-node > .cbi-value:last-child {
+	border-bottom: 0;
+}
+
+/* ── 顶部卡片（标题 / 版本 / 动作按钮）────────────────── */
+
+#cbi-momo:has(.mx-hero) > .cbi-section:has(#cbi-momo-placeholder) {
+	margin: 0 0 14px;
+	border: 0 !important;
+	background: transparent !important;
+	overflow: visible;
+}
+
+#cbi-momo:has(.mx-hero) #cbi-momo-placeholder {
+	display: flex !important;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 10px;
+	box-sizing: border-box;
+	width: 100%;
+	padding: 16px 18px;
+	border: 1px solid var(--mx-line);
+	border-radius: var(--mx-radius);
+	background: var(--mx-card);
+	box-shadow: inset 0 1px 0 var(--mx-hairline), var(--mx-shadow);
+}
+
+#cbi-momo:has(.mx-hero) #cbi-momo-placeholder > .cbi-value {
+	display: block !important;
+	flex: 0 0 auto;
+	float: none;
+	width: auto;
+	margin: 0;
+	padding: 0;
+	border: 0;
+	background: transparent;
+}
+
+#cbi-momo:has(.mx-hero) #cbi-momo-placeholder > .cbi-value:first-child {
+	flex: 1 1 320px;
+	width: auto;
+	max-width: 100%;
+	min-width: 0;
+}
+
+#cbi-momo:has(.mx-hero) #cbi-momo-placeholder .cbi-button,
+#cbi-momo:has(.mx-hero) #cbi-momo-placeholder .btn {
+	margin: 0;
+}
+
+#cbi-momo:has(.mx-hero) #cbi-momo-placeholder .cbi-value-title,
+#cbi-momo:has(.mx-hero) #cbi-momo-placeholder .cbi-value-description {
+	display: none;
+}
+
+#cbi-momo:has(.mx-hero) #cbi-momo-placeholder .cbi-value-field {
+	width: auto !important;
+	min-width: 0;
+	margin: 0;
+	padding: 0;
+}
+
+/* 动作按钮：主操作实心，重启红描边，其余中性描边 */
+#cbi-momo:has(.mx-hero) #cbi-momo-placeholder .cbi-button {
+	border: 1px solid var(--mx-line) !important;
+	background: transparent !important;
+	color: var(--mx-text-2) !important;
+	box-shadow: none !important;
+}
+
+#cbi-momo:has(.mx-hero) #cbi-momo-placeholder .cbi-button-action,
+#cbi-momo:has(.mx-hero) #cbi-momo-placeholder .cbi-button-apply,
+#cbi-momo:has(.mx-hero) #cbi-momo-placeholder .cbi-button-save {
+	border-color: var(--mx-accent) !important;
+	background: var(--mx-accent) !important;
+	color: #fff !important;
+}
+
+#cbi-momo:has(.mx-hero) #cbi-momo-placeholder .cbi-button-negative {
+	border: 1px solid var(--mx-bad) !important;
+	background: transparent !important;
+	color: var(--mx-bad) !important;
+}
+
+#cbi-momo:has(.mx-hero) #cbi-momo-placeholder .cbi-button-positive {
+	border: 1px solid var(--mx-line) !important;
+	background: transparent !important;
+	color: var(--mx-text-2) !important;
+}
+
+/* ── 顶部卡片内文字 ──────────────────────────────────── */
+
+#cbi-momo .mx-hero {
+	display: block;
+	width: 100%;
+	min-width: 0;
+}
+
+#cbi-momo .mx-hero-head {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 10px;
+}
+
+#cbi-momo .mx-hero-title {
+	font-size: 20px;
+	font-weight: 600;
+	letter-spacing: -.01em;
+	line-height: 1.3;
+	color: var(--mx-text);
+}
+
+#cbi-momo .mx-hero-sub {
+	margin-top: 6px;
+	max-width: 64em;
+	font-size: 12.5px;
+	font-weight: 400;
+	line-height: 1.65;
+	color: var(--mx-text-2);
+	white-space: normal;
+	word-break: normal;
+	overflow-wrap: break-word;
+}
+
+#cbi-momo .mx-hero .mx-meta {
+	margin-top: 9px;
+}
+
+#cbi-momo .mx-meta {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	font-size: 12px;
+	font-weight: 400;
+	line-height: 1.6;
+	color: var(--mx-text-3);
+}
+
+#cbi-momo .mx-meta b {
+	font-weight: 500;
+	color: var(--mx-text);
+	font-feature-settings: "tnum";
+}
+
+/* 分隔点：亮暗都用三级文字色再降透明度，比直接用边框色更清楚 */
+#cbi-momo .mx-sep {
+	color: var(--mx-text-3);
+	opacity: .5;
+}
+
+#cbi-momo .mx-link {
+	color: var(--mx-accent);
+	text-decoration: none;
+	white-space: nowrap;
+}
+
+#cbi-momo .mx-link:hover {
+	text-decoration: underline;
+}
+
+/* 状态胶囊：底色 + 同色系细描边，两种主题下都有清晰轮廓 */
+#cbi-momo #core_status {
+	width: auto;
+	min-width: 0;
+	height: auto;
+	margin: 0;
+	padding: 2px 10px;
+	border: 1px solid var(--mx-line-soft) !important;
+	border-radius: 100px;
+	font-size: 11px;
+	font-style: normal;
+	font-weight: 500;
+	line-height: 1.7;
+	letter-spacing: .01em;
+	text-align: center;
+	box-shadow: none !important;
+	background: var(--mx-ghost);
+	color: var(--mx-text-3);
+}
+
+#cbi-momo #core_status[data-state="on"] {
+	border-color: var(--mx-ok-line) !important;
+	background: var(--mx-ok-soft) !important;
+	color: var(--mx-ok) !important;
+}
+
+#cbi-momo #core_status[data-state="off"] {
+	border-color: var(--mx-bad-line) !important;
+	background: var(--mx-bad-soft) !important;
+	color: var(--mx-bad) !important;
+}
+
+/* ── 行间距微调（只调间距与文字色，不动控件）──────────── */
+
+#cbi-momo .cbi-value {
+	padding-top: 9px;
+	padding-bottom: 9px;
+}
+
+#cbi-momo .cbi-value-title {
+	color: var(--mx-text-2);
+}
+
+#cbi-momo .cbi-value-description {
+	color: var(--mx-text-3);
+}
+
+/* ── 底部操作条 ──────────────────────────────────────── */
+
+#cbi-momo .cbi-page-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin: 4px 0 0;
+	padding: 14px 0 0;
+	border: 0;
+	border-top: 1px solid var(--mx-line-soft);
+	background: transparent;
+}
+
+#cbi-momo .cbi-page-actions .cbi-button,
+#cbi-momo .cbi-page-actions .btn {
+	margin: 0;
+}
+
+/* ── 订阅表格：撑满 + 跟随主题的表格线 ───────────────
+ * argon 自带的行线是固定的黑色半透明，暗色下几乎看不见，
+ * 因此这里用 --mx-line / --mx-line-soft 重画。
+ * 只动 border 与内边距，不动布局，避免把单元格压扁。
+ */
+
+#cbi-momo-subscription,
+#cbi-momo-subscription .cbi-section-table {
+	width: 100% !important;
+	max-width: none;
+}
+
+#cbi-momo-subscription .cbi-section-table-cell {
+	padding-top: 9px;
+	padding-bottom: 9px;
+}
+
+#cbi-momo-subscription .cbi-section-table .thead {
+	background: var(--mx-th);
+	border-bottom: 1px solid var(--mx-line);
+}
+
+#cbi-momo-subscription .cbi-section-table .thead .cbi-section-table-cell {
+	color: var(--mx-text-3);
+	font-size: 11.5px;
+	font-weight: 500;
+	letter-spacing: .02em;
+}
+
+/* div 结构（argon 4.x） */
+#cbi-momo-subscription .cbi-section-table .tr {
+	border-bottom: 1px solid var(--mx-line-soft);
+}
+
+#cbi-momo-subscription .cbi-section-table .tbody .tr:last-child {
+	border-bottom: 0;
+}
+
+/* 原生 table 结构（老主题） */
+#cbi-momo-subscription .cbi-section-table td,
+#cbi-momo-subscription .cbi-section-table th {
+	border-bottom: 1px solid var(--mx-line-soft);
+}
+
+#cbi-momo-subscription .cbi-section-table tr:last-child td {
+	border-bottom: 0;
+}
+
+
+/* ── 多行文本（编辑器）────────────────────────────────── */
+
+#cbi-momo .cbi-value-field:has(textarea) {
+	width: 100% !important;
+	max-width: none !important;
+}
+
+#cbi-momo textarea {
+	box-sizing: border-box;
+	width: 100% !important;
+	max-width: 100% !important;
+	min-height: 380px;
+	padding: 10px 12px;
+	border-radius: var(--mx-radius-sm);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: 12px;
+	line-height: 1.55;
+}
+
+/* ── 上传区 ──────────────────────────────────────────── */
+
+#cbi-momo input[type="file"] {
+	box-sizing: border-box;
+	max-width: 100%;
+}
+
+/* ── 窄屏 ────────────────────────────────────────────── */
+
+@media screen and (max-width: 720px) {
+	#cbi-momo #cbi-momo-placeholder {
+		padding: 14px;
+	}
+
+	#cbi-momo #cbi-momo-placeholder > .cbi-value:nth-child(2) {
+		margin-left: 0;
+	}
+
+	#cbi-momo .mx-hero-title {
+		font-size: 18px;
+	}
+}

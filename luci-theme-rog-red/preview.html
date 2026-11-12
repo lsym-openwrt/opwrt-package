@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="rog-red" data-theme-mode="auto" data-darkmode="true" data-mode="dark">
+<head>
+<meta charset="utf-8">
+<title>ROG-OS 主题预览 · luci-theme-rog-red</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0A0A0A">
+<link rel="stylesheet" href="htdocs/luci-static/rog-red/cascade.css?v=1.0.9">
+<script>
+/* 与 header.ut 中一致的亮暗逻辑：默认跟随系统，选中自动时实时同步 */
+(function(){
+	var root = document.documentElement;
+	var KEY = 'rog-theme-mode';
+	var mql = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+
+	function readMode(){
+		try { var v = localStorage.getItem(KEY); if (v==='light'||v==='dark'||v==='auto') return v; } catch(e){}
+		return 'auto';
+	}
+	function isDark(m){ return m==='dark' || (m==='auto' && (!mql || mql.matches)); }
+	function label(m, d){ return m==='auto' ? ('自动 · 跟随系统（' + (d?'暗色':'亮色') + '）') : (m==='dark'?'暗色模式':'亮色模式'); }
+
+	function syncToggle(btn, m, d){
+		if (!btn) return;
+		btn.setAttribute('title', label(m,d) + ' · 点击切换');
+		btn.setAttribute('data-mode', m);
+	}
+
+	function apply(mode){
+		var dark = isDark(mode);
+		root.setAttribute('data-theme-mode', mode);
+		root.setAttribute('data-darkmode', dark ? 'true' : 'false');
+		root.setAttribute('data-mode', dark ? 'dark' : 'light');
+		var meta = document.querySelector('meta[name="theme-color"]');
+		if (meta) meta.setAttribute('content', dark ? '#0A0A0A' : '#F1F2F5');
+		syncToggle(document.getElementById('rog-theme-toggle'), mode, dark);
+		document.querySelectorAll('[data-preview-mode]').forEach(function(b){
+			b.classList.toggle('active', b.getAttribute('data-preview-mode') === mode);
+		});
+		return dark;
+	}
+
+	window.rogApplyTheme = apply;
+	apply(readMode());
+
+	if (mql) {
+		var onSys = function(){ if (readMode()==='auto') apply('auto'); };
+		if (mql.addEventListener) mql.addEventListener('change', onSys);
+		else if (mql.addListener) mql.addListener(onSys);
+	}
+
+	function setMode(m){
+		try { localStorage.setItem(KEY, m); } catch(e){}
+		apply(m);
+	}
+
+	document.addEventListener('DOMContentLoaded', function(){
+		var btn = document.getElementById('rog-theme-toggle');
+		if (btn) btn.addEventListener('click', function(){
+			var o=['auto','light','dark'];
+			setMode(o[(o.indexOf(readMode())+1)%3]);
+		});
+		document.querySelectorAll('[data-preview-mode]').forEach(function(b){
+			b.addEventListener('click', function(){ setMode(b.getAttribute('data-preview-mode')); });
+		});
+		var openLogin = document.getElementById('preview-open-login');
+		if (openLogin) openLogin.addEventListener('click', function(){
+			document.body.classList.add('modal-overlay-active');
+			document.getElementById('modal_overlay').style.display='flex';
+			document.querySelector('#modal_overlay .modal').style.display='block';
+		});
+		var closeLogin = document.getElementById('preview-close-login');
+		if (closeLogin) closeLogin.addEventListener('click', function(){
+			document.body.classList.remove('modal-overlay-active');
+			document.getElementById('modal_overlay').style.display='none';
+		});
+	});
+
+	/* 主题页头 favicon（与 header.ut 同款红色败家之眼） */
+	window.addEventListener('load', function(){
+		var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><defs><radialGradient id="p" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#FF3B4E"/><stop offset="55%" stop-color="#FF0018"/><stop offset="100%" stop-color="#99000A"/></radialGradient></defs><circle cx="50" cy="50" r="50" fill="#0A0A0A"/><circle cx="50" cy="50" r="47" fill="none" stroke="#E60012" stroke-width="2"/><path d="M15 46 C15 24 32 10 50 10 C68 10 85 24 85 46 C85 60 70 68 50 68 C30 68 15 60 15 46 Z" fill="none" stroke="#FF0018" stroke-width="2.5" stroke-linecap="round"/><circle cx="50" cy="42" r="15" fill="url(#p)"/><circle cx="55" cy="37" r="4" fill="#FFFFFF" opacity="0.9"/></svg>';
+		var href = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+		document.querySelectorAll('link[rel="icon"], link[rel="shortcut icon"]').forEach(function(link){
+			var nl = link.cloneNode(); nl.href = href; link.parentNode.replaceChild(nl, link);
+		});
+		document.querySelectorAll('img.rog-logo, img.asus-logo').forEach(function(img){ img.src = href; });
+	});
+})();
+</script>
+</head>
+<body data-page="admin-status-overview">
+
+<header>
+	<button class="menu-btn" type="button" aria-label="menu"><span></span></button>
+	<a class="brand" href="#"><img src="htdocs/luci-static/rog-red/logo.svg" alt="" class="rog-logo"><span class="brand-text">WenWrt</span></a>
+	<div id="rog-sysstat" class="pull-right">
+		<span class="rog-stat"><span class="rog-stat-label">CPU</span><span class="rog-stat-bar"><span class="rog-stat-fill" style="width:38%"></span></span><span class="rog-stat-val">38%</span></span>
+		<span class="rog-stat"><span class="rog-stat-label">MEM</span><span class="rog-stat-bar"><span class="rog-stat-fill" style="width:62%"></span></span><span class="rog-stat-val">62%</span></span>
+	</div>
+	<div id="indicators" class="pull-right">
+		<button id="rog-theme-toggle" class="rog-theme-toggle" type="button" aria-label="切换主题"></button>
+		<div data-indicator="poll-status" data-style="active">Connected</div>
+		<div data-indicator="uci-changes" data-style="inactive">2</div>
+	</div>
+</header>
+
+<aside class="sidebar">
+	<ul class="nav" id="topmenu">
+		<li data-path="admin/status" class="active"><a href="#"><span class="nav-menu-title">Status</span></a></li>
+		<li data-path="admin/system" class="dropdown open"><a href="#" class="menu"><span class="nav-menu-title">System</span></a>
+			<ul class="dropdown-menu" style="display:block">
+				<li><a href="#"><span class="nav-menu-title">System</span></a></li>
+				<li><a href="#"><span class="nav-menu-title">Administration</span></a></li>
+				<li><a href="#"><span class="nav-menu-title">Software</span></a></li>
+			</ul>
+		</li>
+		<li data-path="admin/services"><a href="#"><span class="nav-menu-title">Services</span></a></li>
+		<li data-path="admin/network"><a href="#"><span class="nav-menu-title">Network</span></a></li>
+		<li data-path="admin/nas"><a href="#"><span class="nav-menu-title">Storage</span></a></li>
+		<li data-path="admin/docker"><a href="#"><span class="nav-menu-title">Docker</span></a></li>
+		<li data-path="admin/modem"><a href="#"><span class="nav-menu-title">Modem</span></a></li>
+	</ul>
+</aside>
+<div class="sidebar-overlay"></div>
+
+<div id="maincontent" class="container">
+	<ul class="breadcrumb" id="modemenu">
+		<li><a href="#">Status</a></li>
+		<li><a href="#">Overview</a></li>
+		<li class="active"><a href="#">System</a></li>
+	</ul>
+
+	<h1>Status <small>Overview</small></h1>
+
+	<h2>System Information</h2>
+	<div class="cbi-section-node">
+		<div class="cbi-section">
+			<div class="cbi-value"><label class="cbi-value-title">Hostname</label>
+				<div class="cbi-value-field"><input type="text" value="WenWrt-ROG"></div></div>
+			<div class="cbi-value"><label class="cbi-value-title">Model</label>
+				<div class="cbi-value-field"><span>ASUS ROG / MT7981</span></div></div>
+			<div class="cbi-value"><label class="cbi-value-title">Timezone</label>
+				<div class="cbi-value-field"><select><option>Asia/Shanghai</option><option>UTC</option></select></div></div>
+			<div class="cbi-value"><label class="cbi-value-title">Enable ROG accent</label>
+				<div class="cbi-value-field"><input type="checkbox" checked></div></div>
+			<div class="cbi-value"><label class="cbi-value-title">Boot mode</label>
+				<div class="cbi-value-field">
+					<label><input type="radio" name="bm" checked> Auto</label>
+					<label><input type="radio" name="bm"> Manual</label>
+				</div></div>
+		</div>
+	</div>
+
+	<h2>Network Interfaces</h2>
+	<div class="cbi-section-node">
+		<div class="table">
+			<div class="tr"><div class="th">Interface</div><div class="th">Address</div><div class="th">Rx / Tx</div><div class="th">Load</div></div>
+			<div class="tr"><div class="td">br-lan</div><div class="td">192.168.1.1</div><div class="td">1.2 MB/s / 640 KB/s</div><div class="td"><div class="cbi-progressbar"><div style="width:45%"></div></div></div></div>
+			<div class="tr"><div class="td">eth0</div><div class="td">DHCP · 1000 Mbps</div><div class="td">8.4 MB/s / 2.1 MB/s</div><div class="td"><div class="cbi-progressbar"><div style="width:72%"></div></div></div></div>
+			<div class="tr"><div class="td">wwan0</div><div class="td">100.64.0.2</div><div class="td">420 KB/s / 90 KB/s</div><div class="td"><div class="cbi-progressbar"><div style="width:23%"></div></div></div></div>
+		</div>
+	</div>
+
+	<h2>Status Badges</h2>
+	<p>
+		<span class="label success">Running</span>
+		<span class="label important">Critical</span>
+		<span class="label warning">Pending</span>
+		<span class="label notice">Notice</span>
+		<span class="ifacebadge ifacebadge-active"><span>br-lan</span></span>
+		<span class="ifacebadge"><span>eth0</span></span>
+	</p>
+
+	<h2>Notifications</h2>
+	<div class="alert-message warning"><h4>Warning</h4><p>There is no password set on this router.</p></div>
+	<div class="alert-message error"><h4>Error</h4><p>Failed to connect to the upstream server.</p></div>
+	<div class="alert-message success"><h4>Success</h4><p>Configuration applied successfully.</p></div>
+	<div class="alert-message info"><h4>Info</h4><p>A reboot is required to apply the changes.</p></div>
+	<div class="alert-message notice"><h4>Notice</h4><p>Lua compatibility mode is active.</p></div>
+
+	<h2>Services</h2>
+	<ul class="cbi-tabmenu">
+		<li class="active"><a href="#">General</a></li>
+		<li><a href="#">Advanced</a></li>
+		<li><a href="#">System Log</a></li>
+	</ul>
+
+	<div class="cbi-section-node">
+		<div class="cbi-section">
+			<div class="cbi-value"><label class="cbi-value-title">Text</label>
+				<div class="cbi-value-field"><input type="text" placeholder="Type here..."></div></div>
+			<div class="cbi-value"><label class="cbi-value-title">Description</label>
+				<div class="cbi-value-field"><textarea rows="3">Some longer description text.</textarea></div></div>
+			<div class="cbi-value"><label class="cbi-value-title">Toggle</label>
+				<div class="cbi-value-field"><input type="checkbox" checked></div></div>
+		</div>
+	</div>
+
+	<p>Inline <code>uci show luci.main</code> and a <a href="#">hyperlink</a> example.</p>
+<pre>root@WenWrt:~# uci show luci
+luci.main.mediaurlbase='/luci-static/rog-red'
+luci.themes.rog-red='/luci-static/rog-red'</pre>
+
+	<div class="actions cbi-page-actions">
+		<button class="btn cbi-button-reset">Reset</button>
+		<button class="btn cbi-button cbi-button-negative">Delete</button>
+		<button class="btn cbi-button-save">Save</button>
+		<button class="btn primary cbi-button-apply">Save &amp; Apply</button>
+	</div>
+</div>
+
+<footer>
+	<span>ROG-OS Theme / Powered by <a href="#">LuCI 25.12</a> / <a href="#">OpenWrt 24.10</a></span>
+	<ul class="breadcrumb pull-right"><li><a href="#">Overview</a></li></ul>
+</footer>
+
+<!-- 左上角悬浮预览控制条（仅预览用，不属于主题） -->
+<div class="preview-bar">
+	<strong>预览控制</strong>
+	<button data-preview-mode="auto">自动</button>
+	<button data-preview-mode="light">亮色</button>
+	<button data-preview-mode="dark">暗色</button>
+	<button id="preview-open-login">登录弹窗</button>
+</div>
+<style>
+	.preview-bar{position:fixed;left:12px;bottom:12px;z-index:2000;display:flex;align-items:center;gap:6px;
+		padding:8px 12px;border-radius:8px;font:600 12px/1 system-ui,-apple-system,"Segoe UI",sans-serif;
+		background:rgba(20,20,24,.86);color:#fff;border:1px solid rgba(230,0,18,.55);
+		backdrop-filter:blur(6px);box-shadow:0 6px 24px rgba(0,0,0,.35)}
+	.preview-bar strong{color:#ff4d5c;margin-right:4px}
+	.preview-bar button{cursor:pointer;border:1px solid rgba(255,255,255,.22);background:transparent;color:#e8e8ec;
+		border-radius:6px;padding:6px 10px;font:inherit;transition:all .15s ease}
+	.preview-bar button:hover{border-color:#E60012;color:#fff}
+	.preview-bar button.active{background:#E60012;border-color:#E60012;color:#fff}
+</style>
+
+<!-- 登录弹窗（复刻 sysauth 结构，用于预览亮/暗下的登录页） -->
+<div id="modal_overlay" class="login-overlay" style="display:none">
+	<div class="modal login" style="display:none">
+		<div class="rog-login-header">
+			<img src="htdocs/luci-static/rog-red/logo.svg" alt="" class="rog-logo">
+			<div>
+				<h2>WenWrt</h2>
+				<p>Sign in to manage this device.</p>
+			</div>
+		</div>
+		<form method="post" class="cbi-map">
+			<div class="cbi-section">
+				<div class="cbi-section-node">
+					<div class="cbi-value">
+						<label class="cbi-value-title" for="luci_username">Username</label>
+						<div class="cbi-value-field"><input id="luci_username" type="text" value="root"></div>
+					</div>
+					<div class="cbi-value">
+						<label class="cbi-value-title" for="luci_password">Password</label>
+						<div class="cbi-value-field"><input id="luci_password" type="password" value="secret"></div>
+					</div>
+				</div>
+			</div>
+		</form>
+		<hr>
+		<div class="alert-message error">Invalid username and/or password! Please try again.</div>
+		<button class="btn cbi-button-positive important">Log in</button>
+		<button id="preview-close-login" class="btn cbi-button" style="margin-left:8px">Close</button>
+	</div>
+</div>
+
+</body>
+</html>

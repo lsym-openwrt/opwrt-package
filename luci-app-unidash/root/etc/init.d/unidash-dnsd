@@ -1,0 +1,21 @@
+#!/bin/sh /etc/rc.common
+# unidash DNS 采集守护进程 (供 luci-app-unidash 显示访问网址)
+
+START=99
+STOP=10
+USE_PROCD=1
+
+start_service() {
+	# 自动探测 lua 解释器 (不同固件的包名/路径可能不同)
+	LUA_BIN=""
+	for c in /usr/bin/lua /usr/bin/lua5.4 /usr/bin/lua5.3 /usr/bin/lua5.1; do
+		[ -x "$c" ] && LUA_BIN="$c" && break
+	done
+	[ -z "$LUA_BIN" ] && return 1
+	procd_open_instance
+	procd_set_param command "$LUA_BIN" /usr/bin/unidash-dnsd
+	procd_set_param respawn 3600 5 0
+	procd_set_param stdout 0
+	procd_set_param stderr 0
+	procd_close_instance
+}

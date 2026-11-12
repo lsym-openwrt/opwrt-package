@@ -1,0 +1,24 @@
+#!/bin/sh
+# WAN/planb iface events: notify quickstart; revive daemon if missing.
+
+[ -x /usr/sbin/quickstart ] || exit 0
+
+case "$INTERFACE" in
+planb|wan) ;;
+*) exit 0 ;;
+esac
+
+if ! pgrep -f "/usr/sbin/quickstart serve" >/dev/null 2>&1; then
+	[ -x /etc/init.d/quickstart ] && timeout 5 /etc/init.d/quickstart start >/dev/null 2>&1
+fi
+
+case "$ACTION" in
+ifup|ifupdate)
+	timeout 5 /usr/sbin/quickstart ifaceEvent up "$INTERFACE"
+	;;
+ifdown)
+	timeout 5 /usr/sbin/quickstart ifaceEvent down "$INTERFACE"
+	;;
+esac
+
+exit 0

@@ -1,0 +1,67 @@
+#!/bin/sh /etc/rc.common
+# Robust quickstart daemon init.
+#
+# Root cause of "sometimes does not start after reboot / first boot when
+# many packages are installed":
+#   bare `procd_set_param respawn` => retry defaults to 5. Under heavy
+#   boot load the process can die a few times; procd then abandons it
+#   forever. retry=0 keeps respawning.
+# Also: ensure unix-socket dir exists; delayed boot self-kick; always
+# enable via uci-defaults/postinst (see Makefile).
+
+START=92
+USE_PROCD=1
+
+PROG=/usr/sbin/quickstart
+SOCK_DIR=/var/run/quickstart
+SOCK="$SOCK_DIR/local.sock"
+
+prepare_runtime() {
+	mkdir -p /var/run 2>/dev/null
+	rm -f "$SOCK" "$SOCK".lock 2>/dev/null
+	mkdir -p "$SOCK_DIR"
+	chmod 755 "$SOCK_DIR"
+}
+
+start_service() {
+	[ -x "$PROG" ] || return 1
+	prepare_runtime
+
+	procd_open_instance
+	# wrapper recreates sock dir (tmpfs may have been wiped) then execs
+	procd_set_param command /bin/sh -c \
+		"mkdir -p '$SOCK_DIR' 2>/dev/null; exec '$PROG' serve --unix '$SOCK'"
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	# threshold=3600s  timeout=5s  retry=3 (bounded: avoid crash-loop storm)
+	procd_set_param respawn 3600 5 3
+	procd_set_param limits nofile="1024 4096"
+	procd_close_instance
+}
+
+stop_service() {
+	rm -f "$SOCK" "$SOCK".lock 2>/dev/null
+}
+
+reload_service() {
+	stop
+	start
+}
+
+service_triggers() {
+	procd_add_reload_trigger quickstart
+}
+
+boot() {
+	start
+	# recovery kicks if procd failed to track the instance under load
+	(
+		sleep 5
+		[ -x /etc/init.d/quickstart ] || exit 0
+		/etc/init.d/quickstart running >/dev/null 2>&1 || timeout 5 /etc/init.d/quickstart start
+		sleep 10
+		/etc/init.d/quickstart running >/dev/null 2>&1 || timeout 5 /etc/init.d/quickstart start
+		sleep 20
+		/etc/init.d/quickstart running >/dev/null 2>&1 || timeout 5 /etc/init.d/quickstart start
+	) >/dev/null 2>&1 &
+}

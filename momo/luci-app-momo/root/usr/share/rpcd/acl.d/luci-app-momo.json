@@ -1,0 +1,46 @@
+{
+    "luci-app-momo": {
+        "description": "Grant access to momo procedures",
+        "read": {
+            "uci": [ "momo" ],
+            "ubus": {
+                "rc": [ "*" ],
+                "luci.momo": [ "*" ],
+                "file": [ "*" ]
+            },
+            "file": {
+                "/etc/momo/profiles": [ "list" ],
+                "/etc/momo/subscriptions": [ "list" ],
+                "/etc/momo/run": [ "list" ],
+                "/etc/momo/converter": [ "list" ],
+                "/var/run/momo": [ "list" ],
+                "/var/log/momo": [ "list" ],
+                "/tmp/log/momo": [ "list" ],
+                "/etc/momo/profiles/*": [ "read", "list" ],
+                "/etc/momo/subscriptions/*": [ "read", "list" ],
+                "/etc/momo/run/*": [ "read", "list" ],
+                "/etc/momo/converter/*": [ "read", "list" ],
+                "/var/run/momo/*": [ "read", "list" ],
+                "/var/log/momo/*": [ "read", "list" ],
+                "/tmp/log/momo/*": [ "read", "list" ]
+            }
+        },
+        "write": {
+            "uci": [ "momo" ],
+            "ubus": {
+                "rc": [ "*" ],
+                "luci.momo": [ "*" ],
+                "file": [ "*" ]
+            },
+            "file": {
+                "/etc/momo/profiles/*": [ "write", "list" ],
+                "/etc/momo/subscriptions/*": [ "write", "list" ],
+                "/etc/momo/run/*": [ "write", "list" ],
+                "/etc/momo/converter/*": [ "write", "list" ],
+                "/var/run/momo/*": [ "write", "list" ],
+                "/var/log/momo/*": [ "write", "list" ],
+                "/tmp/log/momo/*": [ "write", "list" ]
+            }
+        }
+    }
+}

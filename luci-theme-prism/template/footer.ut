@@ -1,0 +1,60 @@
+﻿{#
+	Alpha os is made from me for all .. especially for indo wrt members and fan of OpenWrt or DBAI Community
+	luci-theme-prism
+	Copyright 2024 derisamedia <facebook.com/derisamedia>
+-#}
+{% 
+	import { cursor } from 'uci';
+	let uci = cursor();
+	let config = uci.get_all("prism", "theme") || {};
+	let icon = {};
+	
+	uci.foreach("prism", "navbar", function(section) {
+		let address = section.address;
+		let icon_url = section.icon;
+		if (address && icon_url) {
+			icon_url = replace(icon_url, /^\/www\/luci\-static\/prism\//, "");
+			icon[address] = icon_url;
+		}
+	});
+
+	let navbar_enabled = (config.navbar == "1");
+	let num_links = 0;
+	uci.foreach("prism", "navbar", function(section) {
+		if (section.enable == "Enable") {
+			num_links++;
+		}
+	});
+
+	let link_width = `calc(100% / ${num_links > 0 ? num_links : 1})`;
+	let background_color = config.color || '#27272a';
+	let blur_value = config.blur || 0;
+	let link_blur = `blur(${blur_value}px)`;
+%}
+
+<style>
+.main > .main-left, .cbi-section, .cbi-section-error, #iptables, .Firewall form, #cbi-network > .cbi-section-node, #cbi-wireless > .cbi-section-node, #cbi-wireless > #wifi_assoclist_table, [data-tab-title], [data-page^="admin-system-admin"]:not(.node-main-login) .cbi-map:not(#cbi-dropbear), [data-page="admin-system-opkg"] #maincontent > .container, .tabs, .cbi-tabmenu, .cbi-tooltip {
+	background-color: {{ background_color }};
+	backdrop-filter: {{ link_blur }};
+	-webkit-backdrop-filter: {{ link_blur }};
+}
+
+{% if (!navbar_enabled): %}
+{% endif %}
+textarea, .cbi-input-textarea, textarea.cbi-input-textarea {
+    color: #e5e7eb !important;
+    -webkit-text-fill-color: #e5e7eb !important;
+    caret-color: #e5e7eb !important;
+}
+</style>
+
+</div>
+<footer class="mobile">
+	<a href="https://github.com/derisamedia/luci-theme-prism">{{ version.distname }} {{ version.distversion }} | Prism Theme v3.9.7</a>
+</footer>
+</div>
+</div>
+<script type="text/javascript">L.require('menu-prism')</script>
+<script src="{{ media }}/app.js?v=3.9.7"></script>
+</body>
+</html>

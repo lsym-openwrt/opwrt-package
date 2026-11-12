@@ -1,0 +1,469 @@
+#!/usr/bin/ucode
+
+import { popen, writefile, readfile, stat } from 'fs';
+
+// ---------------------------------------------------------------------------
+// 这个文件必须"自包含"。
+//
+// rpcd 在启动时扫描 /usr/share/rpcd/ucode/ 并把每个文件当作独立模块加载，
+// 只要模块在加载阶段抛错（最常见的就是 import 一个不存在的文件），rpcd 会
+// 静默丢弃整个模块 —— 不写日志、不报错 —— 于是 ubus 上就没有 luci.momo
+// 对象，前端所有页面直接 RPCError: Object not found。
+//
+// 之前这里 `import ... from '/etc/momo/ucode/include.uc'`，结果只要 momo 包
+// 升级过程中那个文件被替换/暂时缺失（apk 是删了再写），整个面板就全挂。
+// 所以路径、profile 读取、用户/组枚举全部自带一份，include.uc 只作为
+// 可选的事实来源，失败就用内置默认值，绝不影响模块加载。
+// ---------------------------------------------------------------------------
+
+// 与 /etc/momo/scripts/include.sh 的 get_paths 保持一致；安装目录是固定的
+const DEFAULT_PATHS = {
+	home_dir: '/etc/momo',
+	profiles_dir: '/etc/momo/profiles',
+	subscriptions_dir: '/etc/momo/subscriptions',
+	run_dir: '/etc/momo/run',
+	run_profile_path: '/etc/momo/run/config.json',
+	ucode_dir: '/etc/momo/ucode',
+	include_uc: '/etc/momo/ucode/include.uc',
+	hijack_ut: '/etc/momo/ucode/hijack.ut',
+	sh_dir: '/etc/momo/scripts',
+	include_sh: '/etc/momo/scripts/include.sh',
+	firewall_include_sh: '/etc/momo/scripts/firewall_include.sh',
+	debug_sh: '/etc/momo/scripts/debug.sh',
+	firewall_dir: '/etc/momo/firewall',
+	geoip_cn_nft: '/etc/momo/firewall/geoip_cn.nft',
+	geoip6_cn_nft: '/etc/momo/firewall/geoip6_cn.nft',
+	log_dir: '/var/log/momo',
+	app_log_path: '/var/log/momo/app.log',
+	core_log_path: '/var/log/momo/core.log',
+	debug_log_path: '/var/log/momo/debug.log',
+	temp_dir: '/var/run/momo',
+	pid_file_path: '/var/run/momo/momo.pid',
+	started_flag_path: '/var/run/momo/started.flag',
+	bridge_nf_call_iptables_flag_path: '/var/run/momo/bridge_nf_call_iptables.flag',
+	bridge_nf_call_ip6tables_flag_path: '/var/run/momo/bridge_nf_call_ip6tables.flag'
+};
+
+const SAFE_SECTION_CHARS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_@-[]';
+
+// section 名只可能是 uci 名或 @subscription[N]；逐字符白名单比正则更稳
+function safe_section(name) {
+	if (type(name) != 'string' || length(name) == 0 || length(name) > 64) {
+		return false;
+	}
+	for (let i = 0; i < length(name); i++) {
+		if (index(SAFE_SECTION_CHARS, substr(name, i, 1)) < 0) {
+			return false;
+		}
+	}
+	return true;
+}
+
+// rpcd 是单线程事件循环，任何一个方法里同步等外部命令，整个 LuCI 的 RPC 都会被堵住，
+// 前端就变成 RPCError。这里把所有外部命令收敛到 run()，并统一包一层 try/catch，
+// 保证异常只影响本次调用、不冒泡成 RPC 错误。
+//
+// 注意：本版 ucode 的 popen() 只接受字符串（传数组返回 NULL），所以自己拼命令，
+// 参数一律用 shq() 单引号转义，避免 body/secret 里的引号打断命令。
+function shq(v) {
+	const s = (type(v) == 'string') ? v : sprintf('%s', v ?? '');
+	const parts = split(s, "'");
+	// join(分隔符, 数组)：ucode 的参数顺序和 JS 相反
+	return "'" + join("'\\''", parts) + "'";
+}
+
+function shline(argv) {
+	const parts = [];
+	for (let arg in argv) {
+		push(parts, shq(arg));
+	}
+	return join(' ', parts);
+}
+
+function run(argv) {
+	let out = '';
+	let code = -1;
+
+	try {
+		const process = popen(shline(argv));
+		if (process) {
+			try {
+				out = process.read('all') ?? '';
+			} catch (e) {
+				out = '';
+			}
+			code = process.close();
+		}
+	} catch (e) {
+		return { code: -1, out: '' };
+	}
+
+	return { code: code, out: trim(out) };
+}
+
+// 每个方法都套这一层：出错返回兜底值而不是抛异常
+function guard(fn, fallback) {
+	return function(req) {
+		try {
+			return fn(req);
+		} catch (e) {
+			return fallback;
+		}
+	};
+}
+
+function first_line(str) {
+	const lines = split(str ?? '', '\n');
+	return length(lines) > 0 ? trim(lines[0]) : '';
+}
+
+// ---------------------------------------------------------------------------
+// 路径：优先问 include.sh（可配置项都从那里来），失败回落内置默认值并缓存。
+// ---------------------------------------------------------------------------
+let _paths_cache = null;
+
+function get_paths() {
+	if (_paths_cache) {
+		return _paths_cache;
+	}
+
+	let result = null;
+	try {
+		const process = popen('. /etc/momo/scripts/include.sh 2>/dev/null && get_paths 2>/dev/null');
+		if (process) {
+			try {
+				result = json(process);
+			} catch (e) {
+				result = null;
+			}
+			process.close();
+		}
+	} catch (e) {
+		result = null;
+	}
+
+	if (type(result) != 'object' || !result.run_profile_path) {
+		result = DEFAULT_PATHS;
+	}
+
+	_paths_cache = result;
+	return result;
+}
+
+// api() 每次调用都要读一次 config.json 并做 JSON 解析，config.json 动辄几百 KB，
+// 面板轮询时这条路径会被反复走。按 mtime 缓存，转换脚本重写文件后自动失效。
+let _profile_cache = null;
+let _profile_mtime = 0;
+
+function load_profile() {
+	const paths = get_paths();
+	const file = paths.run_profile_path ?? DEFAULT_PATHS.run_profile_path;
+
+	let mtime = 0;
+	try {
+		const st = stat(file);
+		mtime = st ? st.mtime : 0;
+	} catch (e) {
+		mtime = 0;
+	}
+
+	if (_profile_cache && mtime != 0 && mtime == _profile_mtime) {
+		return _profile_cache;
+	}
+
+	let result = null;
+	try {
+		result = json(readfile(file));
+	} catch (e) {
+		// 转换过程中可能读到写了一半的文件，回退到上一份可用配置
+		return _profile_cache ?? {};
+	}
+
+	if (type(result) == 'object') {
+		_profile_cache = result;
+		_profile_mtime = mtime;
+		return result;
+	}
+
+	return _profile_cache ?? {};
+}
+
+// defaults 里存在的键才用 profile 覆盖，避免把 profile 的字段全塞给前端
+function merge_exists(target, source) {
+	if (type(target) != 'object' || type(source) != 'object') {
+		return target;
+	}
+
+	for (let key in keys(source)) {
+		if (!exists(target, key)) {
+			continue;
+		}
+		const target_value = target[key];
+		const source_value = source[key];
+		if (type(target_value) == 'object' && type(source_value) == 'object') {
+			target[key] = merge_exists(target_value, source_value);
+		} else {
+			target[key] = source_value;
+		}
+	}
+
+	return target;
+}
+
+function read_identifiers(file) {
+	const result = [];
+	try {
+		for (let line in split(readfile(file) ?? '', '\n')) {
+			const name = split(line, ':')[0];
+			if (length(name) > 0) {
+				push(result, name);
+			}
+		}
+	} catch (e) {
+	}
+	return result;
+}
+
+function get_users() {
+	return read_identifiers('/etc/passwd');
+}
+
+function get_groups() {
+	return read_identifiers('/etc/group');
+}
+
+// 只用于「分流规则里可选的目标」，列不出来时返回空数组即可，不必精确
+function get_cgroups() {
+	const cgroup_path = '/sys/fs/cgroup/';
+	const result = [];
+
+	try {
+		const process = popen(`find ${cgroup_path} -type d -mindepth 1 2>/dev/null`);
+		if (process) {
+			for (let line = process.read('line'); length(line); line = process.read('line')) {
+				push(result, substr(trim(line), length(cgroup_path)));
+			}
+			process.close();
+		}
+	} catch (e) {
+	}
+
+	return result;
+}
+
+// 版本号只在装机时变，缓存到 rpcd 进程退出为止：
+// 首页 load 与轮询都会调 version()，不缓存的话每次都是两次 fork
+let _version_cache = null;
+
+const methods = {
+	get_paths: {
+		call: guard(function() {
+			return get_paths();
+		}, {})
+	},
+	version: {
+		call: guard(function() {
+			if (_version_cache) {
+				return _version_cache;
+			}
+
+			let app = '';
+			let core = '';
+
+			// 新版 OpenWrt 用 apk，老版本用 opkg，逐个试
+			const opkg = run(['opkg', 'list-installed', 'luci-app-momo']);
+			if (opkg.code == 0 && length(first_line(opkg.out)) > 0) {
+				// "luci-app-momo - 1.2.2-r3"
+				const parts = split(first_line(opkg.out), ' ');
+				if (length(parts) >= 3) {
+					app = parts[2];
+				}
+			}
+
+			if (length(app) == 0) {
+				const apk = run(['apk', 'list', '-I', 'luci-app-momo']);
+				if (apk.code == 0) {
+					// "luci-app-momo-1.2.2-r3 x86_64 {...}"
+					const pkg = split(first_line(apk.out), ' ')[0] ?? '';
+					const seg = split(pkg, '-');
+					if (length(seg) >= 4) {
+						app = seg[3];
+					}
+				}
+			}
+
+			const singbox = run(['sing-box', 'version']);
+			if (singbox.code == 0) {
+				// "sing-box version 1.12.0"
+				const parts = split(first_line(singbox.out), ' ');
+				if (length(parts) >= 3) {
+					core = parts[2];
+				}
+			}
+
+			_version_cache = { app: app, core: core };
+			return _version_cache;
+		}, { app: '', core: '' })
+	},
+	profile: {
+		args: { defaults: {} },
+		call: guard(function(req) {
+			const defaults = req.args?.defaults ?? {};
+			const profile = load_profile() ?? {};
+			return merge_exists(defaults, profile);
+		}, {})
+	},
+	update_subscription: {
+		args: { section_id: 'section_id' },
+		call: guard(function(req) {
+			let success = false;
+			const section_id = req.args?.section_id;
+			// 订阅域名被黑洞时 curl 能卡十几分钟，必须加硬超时：
+			// 卡住的不是这一次调用，而是整个 rpcd（单线程），全站 RPC 一起超时
+			if (section_id && safe_section(section_id)) {
+				success = system(shline(['timeout', '180', 'service', 'momo', 'update_subscription', section_id])) == 0;
+			}
+			return { success: success };
+		}, { success: false })
+	},
+	// 异步更新：rpcd 是单线程事件循环，同步等 curl 会把 LuCI 所有 RPC 堵住
+	// （订阅域名黑洞时最长可达十几分钟）。这里只负责把任务甩到后台，立即返回。
+	update_subscription_async: {
+		args: { section_id: 'section_id' },
+		call: guard(function(req) {
+			const section_id = req.args?.section_id;
+			// 只允许 section 名字符集（含匿名段的 @subscription[0] 形式），杜绝命令拼接
+			if (!section_id || !safe_section(section_id)) {
+				return { started: false };
+			}
+			// 用子 shell 后台化，保证 popen 的 close() 不会 pclose 等到底
+			const process = popen(`( service momo update_subscription '${section_id}' >/dev/null 2>&1 & )`);
+			if (process) {
+				process.close();
+			}
+			return { started: true };
+		}, { started: false })
+	},
+	// 更新进度：读 /var/run/momo/sub_update.status（running|done）
+	update_status: {
+		call: guard(function() {
+			let state = 'idle', section = '', success = -1, since = 0;
+			const process = popen('cat /var/run/momo/sub_update.status 2>/dev/null');
+			if (process) {
+				const line = trim(process.read('all') ?? '');
+				process.close();
+				const parts = split(line, ' ');
+				if (length(parts) >= 3) {
+					state = parts[0] ?? 'idle';
+					section = parts[1] ?? '';
+					if (state == 'done') {
+						success = +parts[2] || 0;
+						since = +parts[3] || 0;
+					} else {
+						since = +parts[2] || 0;
+					}
+				}
+			}
+			return { state: state, section: section, success: success, since: since };
+		}, { state: 'idle', section: '', success: -1, since: 0 })
+	},
+	api: {
+		args: { method: 'method', path: 'path', query: 'query', body: 'body' },
+		call: guard(function(req) {
+			const method = req.args?.method;
+			const path = req.args?.path;
+			const query = req.args?.query;
+			const body = req.args?.body;
+
+			if (type(method) != 'string' || length(method) == 0 || type(path) != 'string' || length(path) == 0) {
+				return {};
+			}
+
+			const profile = load_profile() ?? {};
+			const clash_api = profile['experimental']?.['clash_api'] ?? {};
+			const api_listen = clash_api['external_controller'];
+			const api_secret = clash_api['secret'] ?? '';
+
+			if (!api_listen) {
+				return {};
+			}
+
+			// api_listen 通常是 "127.0.0.1:9090"，补上 scheme 让 curl 不去猜
+			const base = index(api_listen, '://') < 0 ? 'http://' + api_listen : api_listen;
+			const url = base + (substr(path, 0, 1) == '/' ? '' : '/') + path;
+
+			const argv = [
+				'curl', '--silent', '--show-error',
+				'--connect-timeout', '2', '--max-time', '5',
+				'--request', method,
+				'--url', url
+			];
+			if (length(api_secret) > 0) {
+				push(argv, '--oauth2-bearer', api_secret);
+			}
+			if (type(query) == 'string' && length(query) > 0) {
+				push(argv, '--url-query', query);
+			}
+			if (type(body) == 'string' && length(body) > 0) {
+				push(argv, '--data-binary', body);
+			}
+
+			const process = popen(shline(argv));
+			if (!process) {
+				return {};
+			}
+
+			let result = {};
+			try {
+				result = json(process) ?? {};
+			} catch (e) {
+				// curl 超时或内核未运行时会返回空内容，这里保持空对象，不抛错
+				result = {};
+			}
+			process.close();
+
+			return result;
+		}, {})
+	},
+	get_identifiers: {
+		call: guard(function() {
+			const users = filter(get_users(), (x) => x != '');
+			const groups = filter(get_groups(), (x) => x != '');
+			const cgroups = filter(get_cgroups(), (x) => x != '' && index(x, 'services/momo') < 0);
+			return { users: users, groups: groups, cgroups: cgroups };
+		}, { users: [], groups: [], cgroups: [] })
+	},
+	debug: {
+		call: guard(function() {
+			const paths = get_paths();
+			if (!paths.debug_sh) {
+				return { success: false };
+			}
+
+			// 以前是同步 system()，debug.sh 里要跑 uci/nft/dmesg/sing-box，能卡住 rpcd 几十秒。
+			// 改成读 stdout + 硬超时，超时也算成功（部分日志仍然可用）。
+			let success = false;
+			const process = popen(shline(['timeout', '60', 'sh', paths.debug_sh]));
+			if (process) {
+				let out = '';
+				try {
+					out = process.read('all') ?? '';
+				} catch (e) {
+					out = '';
+				}
+				const code = process.close();
+				success = (code == 0 || code == 124);
+				if (paths.debug_log_path && length(out) > 0) {
+					try {
+						writefile(paths.debug_log_path, out);
+					} catch (e) {
+						success = false;
+					}
+				}
+			}
+			return { success: success };
+		}, { success: false })
+	}
+};
+
+return { 'luci.momo': methods };

@@ -1,0 +1,143 @@
+<%+header%>
+<script>
+// 根据页面实际背景色自动检测亮暗主题
+(function(){
+  // 检测背景色亮度：取 <body> 或 <html> 的实际计算背景色
+  function getLuminance(el) {
+    var bg = getComputedStyle(el).backgroundColor;
+    if (!bg || bg === 'transparent' || bg === 'rgba(0, 0, 0, 0)') return -1;
+    // 解析 rgb/rgba
+    var m = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+    if (!m) return -1;
+    // 相对亮度公式
+    return 0.299 * parseInt(m[1]) + 0.587 * parseInt(m[2]) + 0.114 * parseInt(m[3]);
+  }
+  // 逐层向上查找第一个有实际背景色的元素
+  function detectDark() {
+    var el = document.body;
+    var depth = 0;
+    while (el && depth < 5) {
+      var lum = getLuminance(el);
+      if (lum >= 0) return lum < 128;
+      el = el.parentElement;
+      depth++;
+    }
+    return false; // 找不到背景色时默认亮色
+  }
+  // 应用主题设置
+  function applyTheme() {
+    var isDark = detectDark();
+    var scheme = isDark ? 'dark' : 'light';
+    // 主题未变化时跳过重复写入，颜色保持稳定
+    if (document.body.getAttribute('theme') === scheme) return;
+    // 设置 body[theme] 属性，让 CSS 选择器生效
+    document.body.setAttribute('theme', scheme);
+    // 设置 meta color-scheme
+    var existingMeta = document.querySelector('meta[name="color-scheme"]');
+    if (existingMeta) {
+      existingMeta.content = scheme;
+    } else {
+      var meta = document.createElement('meta');
+      meta.name = 'color-scheme';
+      meta.content = scheme;
+      document.head.appendChild(meta);
+    }
+    // 设置 CSS color-scheme
+    var existingStyle = document.getElementById('quickstart-color-scheme');
+    if (existingStyle) {
+      existingStyle.textContent = 'html,body{color-scheme:' + scheme + '!important}';
+    } else {
+      var style = document.createElement('style');
+      style.id = 'quickstart-color-scheme';
+      style.textContent = 'html,body{color-scheme:' + scheme + '!important}';
+      document.head.appendChild(style);
+    }
+  }
+  // 初始应用主题
+  applyTheme();
+  // 快速重试序列：骑跨背景色过渡期，让文字颜色与主题切换同步
+  function scheduleApply() {
+    [0, 40, 90, 150, 220, 300, 400, 550, 700].forEach(function(d) { setTimeout(applyTheme, d); });
+  }
+  // 监听 body/html 的 style 与 class 变化（覆盖所有主题切换触发源）
+  var obsOpts = { attributes: true, attributeFilter: ['style', 'class'] };
+  var observer = new MutationObserver(scheduleApply);
+  observer.observe(document.body, obsOpts);
+  try { observer.observe(document.documentElement, obsOpts); } catch (e) {}
+  // 背景过渡结束的瞬间即刻应用（事件驱动，零等待）
+  document.addEventListener('transitionend', function(e) {
+    var n = e.target;
+    if (n === document.body || n === document.documentElement) applyTheme();
+  }, false);
+  // 系统深浅色切换：媒体查询变化没有任何 DOM 属性改动，必须单独监听才能瞬时感知
+  if (window.matchMedia) {
+    try {
+      var mq = window.matchMedia('(prefers-color-scheme: dark)');
+      if (mq.addEventListener) mq.addEventListener('change', scheduleApply);
+      else if (mq.addListener) mq.addListener(scheduleApply);
+    } catch (e) {}
+  }
+  // 动态注入/修改的样式表：部分主题以增删 <style> 切换配色，属性观察器看不到
+  try {
+    var headObs = new MutationObserver(scheduleApply);
+    headObs.observe(document.head, { childList: true, subtree: true, characterData: true });
+  } catch (e) {}
+  // 定期检查主题变化（兜底 CSSOM insertRule 等一切静默改色手段）
+  setInterval(applyTheme, 1000);
+})();
+</script>
+<%
+  local jsonc = require "luci.jsonc"
+  local uci = require "luci.model.uci".cursor()
+  local features = { "_lua_force_array_" }
+  local configs = {}
+  if luci.sys.call("which ota >/dev/null 2>&1 && ota >/dev/null 2>&1") == 0 then
+      features[#features+1] = "ota"
+  end
+  if luci.sys.call("[ -d /ext_overlay ] >/dev/null 2>&1") == 0 then
+      features[#features+1] = "sandbox"
+  end
+  if luci.sys.call("[ -e /etc/init.d/dockerd ] >/dev/null 2>&1") == 0 then
+      features[#features+1] = "dockerd"
+  end
+  if luci.sys.call("[ -e /etc/init.d/unishare ] >/dev/null 2>&1") == 0 then
+      features[#features+1] = "unishare"
+  end
+  if luci.sys.call("/etc/init.d/ttyd running >/dev/null 2>&1") == 0 then
+      features[#features+1] = "ttyd"
+      local port = uci:get_first("ttyd", "ttyd", "port") or "7681"
+      local ssl  = uci:get_first("ttyd", "ttyd", "ssl") or "0"
+      configs["ttyd"] = {
+        port = tonumber(port),
+        ssl = ssl == "1"
+      }
+  end
+  if uci:get("quickstart", "main", "disable_update_check") == "1" then
+      configs["update"] = {
+        disable = true
+      }
+  end
+-%>
+<script>
+    (function(){
+      window.token = "<%=token%>";
+      var vue_prefix="<%=prefix%>";
+      window.vue_base = vue_prefix + '/';
+      window.vue_lang_data = '/luci-static/quickstart/i18n/<%=lang%>.json<%# ?v=PKG_VERSION %>';
+      window.vue_lang = '<%=lang%>';
+      window.quickstart_features = <%=jsonc.stringify(features)%>;
+      window.quickstart_configs = <%=jsonc.stringify(configs)%>;
+      if (location.pathname != vue_prefix && !location.pathname.startsWith(window.vue_base)) {
+        if (window.history && window.history.replaceState) {
+          window.history.replaceState({}, null, vue_prefix);
+        } else {
+          location.href = vue_prefix;
+        }
+      }
+    })();
+</script>
+<div id="app">
+</div>
+<script type="module" crossorigin src="/luci-static/quickstart/index.js<%# ?v=PKG_VERSION %>"></script>
+<link rel="stylesheet" href="/luci-static/quickstart/style.css<%# ?v=PKG_VERSION %>">
+<%+footer%>

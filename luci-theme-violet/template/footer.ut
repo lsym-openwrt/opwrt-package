@@ -1,0 +1,38 @@
+{#
+	Violet os is made from me for all .. especially for indo wrt members and fan of OpenWrt or DBAI Community
+	luci-theme-violet
+	Copyright 2024 derisamedia <facebook.com/derisamedia>
+-#}
+{%
+	// Check if dashboard background image exists
+	import { access } from 'fs';
+	let dashboard_bg = "";
+	if (access("/www/luci-static/violet/background/dashboard.png", 0)) {
+		dashboard_bg = "/luci-static/violet/background/dashboard.png";
+	} else if (access("/www/luci-static/violet/background/dashboard.jpg", 0)) {
+		dashboard_bg = "/luci-static/violet/background/dashboard.jpg";
+	}
+%}
+
+{% if (dashboard_bg != ""): %}
+<style>
+body {
+	background-image: url('{{ dashboard_bg }}') !important;
+	background-size: cover !important;
+	background-position: center center !important;
+	background-repeat: no-repeat !important;
+	background-attachment: fixed !important;
+}
+</style>
+{% endif %}
+
+</div>
+<footer class="mobile">
+	<a href="https://github.com/derisamedia/luci-theme-alpha">{{ version.distname }} {{ version.distversion }} | Violet OS Theme v3.9.7</a>
+</footer>
+</div>
+</div>
+<script type="text/javascript">L.require('menu-violet')</script>
+<script src="{{ media }}/app.js?v=1.0.0"></script>
+</body>
+</html>

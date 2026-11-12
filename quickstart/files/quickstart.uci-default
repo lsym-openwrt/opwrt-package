@@ -1,0 +1,27 @@
+#!/bin/sh
+# Runs on device install/upgrade via Makefile postinst, and may also run
+# from first-boot /etc/uci-defaults if still present.
+# Must ALWAYS enable the services so they survive reboot.
+# (Old version only enabled when PKG_UPGRADE=1, so a fresh install could
+# leave quickstart disabled after reboot.)
+
+[ -n "$IPKG_INSTROOT" ] && exit 0
+
+# always enable on install and upgrade
+[ -x /etc/init.d/quickstart ] && /etc/init.d/quickstart enable
+[ -x /etc/init.d/startdhns ] && /etc/init.d/startdhns enable
+
+# runtime dir for unix socket
+mkdir -p /var/run/quickstart 2>/dev/null
+
+if [ "$PKG_UPGRADE" = 1 ]; then
+	timeout 10 /etc/init.d/quickstart restart >/dev/null 2>&1 || timeout 10 /etc/init.d/quickstart start >/dev/null 2>&1
+	timeout 20 /etc/init.d/startdhns boot >/dev/null 2>&1
+else
+	# fresh install / sysupgrade restore
+	if ! pgrep -f "/usr/sbin/quickstart serve" >/dev/null 2>&1; then
+		timeout 10 /etc/init.d/quickstart start >/dev/null 2>&1 || true
+	fi
+fi
+
+exit 0

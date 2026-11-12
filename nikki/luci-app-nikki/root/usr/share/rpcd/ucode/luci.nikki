@@ -1,0 +1,172 @@
+'use strict';
+
+import { access, popen, writefile } from 'fs';
+import { get_users, get_groups, get_cgroups, load_profile } from '/etc/nikki/ucode/include.uc';
+
+// 只取第一条非空行。apk/opkg 在异常情况下会输出多行，
+// 直接 trim 会把换行带进版本号，前端显示成一片空白。
+function first_line(str) {
+	return split(trim(str ?? ''), '\n')[0] ?? '';
+}
+
+const OPKG_PATHS = ['/bin/opkg', '/usr/bin/opkg'];
+const APK_PATHS = ['/usr/bin/apk', '/sbin/apk', '/usr/local/bin/apk'];
+
+// access() 失败返回 false/null 而不是抛异常（ucode/fs.c 里 err_return 只写 fs.last_error），
+// 所以这里可以安全地当布尔用，不会把 version() 整个打崩。
+function has_exec(paths) {
+	for (let i = 0; i < length(paths); i++) {
+		if (access(paths[i], 'x')) {
+			return true;
+		}
+	}
+	return false;
+}
+
+function run(command) {
+	let output = '';
+	const process = popen(command);
+	if (process) {
+		output = first_line(process.read('all'));
+		process.close();
+	}
+	return output;
+}
+
+const methods = {
+	version: {
+		call: function() {
+			let app = '';
+
+			if (has_exec(OPKG_PATHS)) {
+				app = run('opkg list-installed luci-app-nikki | cut -d " " -f 3');
+			}
+			else if (has_exec(APK_PATHS)) {
+				// -f 4- 不能写成 -f 4：apk 的包名是 luci-app-nikki-1.26.2-r4，
+				// 只取第 4 段会把 -r4 截掉，和 opkg 分支的结果不一致。
+				app = run('apk list -I luci-app-nikki | cut -d " " -f 1 | cut -d "-" -f 4-');
+			}
+
+			return { app: app, core: run('meowc -v | grep Mihomo | cut -d " " -f 3') };
+		}
+	},
+	profile: {
+		args: { defaults: {} },
+		call: function(req) {
+			let profile = {};
+			const filepath = '/etc/nikki/run/config.yaml';
+
+			if (!access(filepath, 'r')) {
+				return profile;
+			}
+
+			// /var/run 是 tmpfs，nikki 没启动时 /var/run/nikki 不存在。
+			// 那种情况下 writefile 返回 null，yq 读不到入参只会输出空，
+			// json() 再抛异常，整个 profile RPC 就废了 —— 退回 /tmp。
+			const tmpdir = access('/var/run/nikki', 'w') ? '/var/run/nikki' : '/tmp';
+			const tmpFilepath = `${tmpdir}/profile.json`;
+
+			writefile(tmpFilepath, req.args?.defaults ?? {});
+
+			const process = popen(`yq -M -p yaml -o json eval-all 'select(fi == 0) *? select(fi == 1)' ${tmpFilepath} ${filepath}`);
+			if (process) {
+				try {
+					profile = json(process);
+				}
+				catch (e) {
+					profile = {};
+				}
+				process.close();
+			}
+
+			return type(profile) == 'object' ? profile : {};
+		}
+	},
+	update_subscription: {
+		args: { section_id: 'section_id' },
+		call: function(req) {
+			let success = false;
+			const section_id = req.args?.section_id;
+			if (section_id) {
+				success = system(['service', 'nikki', 'update_subscription', section_id]) == 0;
+			}
+			return { success: success };
+		}
+	},
+	api: {
+		args: { method: 'method', path: 'path', query: 'query', body: 'body' },
+		call: function(req) {
+			let result = {};
+
+			const method = req.args?.method ?? 'GET';
+			const path = req.args?.path;
+			const query = req.args?.query;
+			const body = req.args?.body;
+
+			// updateDashboard() 只传 method/path，原来会拼出 ".../undefined" 去打 mihomo
+			if (!path) {
+				return result;
+			}
+
+			const profile = load_profile();
+			const api_listen = profile['external-controller'];
+			const api_tls_listen = profile['external-controller-tls'];
+			const api_secret = profile['secret'];
+			if (!api_listen && !api_tls_listen) {
+				return result;
+			}
+
+			const protocol = api_tls_listen ? 'https' : 'http';
+			const url = (api_tls_listen ?? api_listen) + path;
+
+			// 数组形式交给 execvp，完全不经过 shell：body/query 里的单引号不会再把命令行断句，
+			// 顺带堵掉注入面。params 为空时不传对应参数。
+			const command = [
+				'curl',
+				'--silent',
+				'--proto-default', protocol,
+				'--insecure',
+				'--request', method,
+				'--oauth2-bearer', api_secret ?? ''
+			];
+			if (query) {
+				push(command, '--url-query');
+				push(command, query);
+			}
+			if (body) {
+				push(command, '--data');
+				push(command, body);
+			}
+			push(command, url);
+
+			const process = popen(command);
+			if (process) {
+				try {
+					result = json(process);
+				}
+				catch (e) {
+					result = {};
+				}
+				process.close();
+			}
+
+			return type(result) == 'object' ? result : {};
+		}
+	},
+	get_identifiers: {
+		call: function() {
+			const users = filter(get_users(), (x) => x != '');
+			const groups = filter(get_groups(), (x) => x != '');
+			const cgroups = filter(get_cgroups(), (x) => x != '' && index(x, 'services/nikki') < 0);
+			return { users: users, groups: groups, cgroups: cgroups };
+		}
+	},
+	debug: {
+		call: function() {
+			const success = system('/etc/nikki/scripts/debug.sh > /var/log/nikki/debug.log') == 0;
+			return { success: success };
+		}
+	}
+};
+
+return { 'luci.nikki': methods };

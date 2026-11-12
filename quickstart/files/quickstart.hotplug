@@ -1,0 +1,16 @@
+#!/bin/sh
+# Block device hotplug: notify quickstart; revive daemon if missing.
+
+[ -x /usr/sbin/quickstart ] || exit 0
+
+case "$ACTION" in
+add|remove)
+	if ! pgrep -f "/usr/sbin/quickstart serve" >/dev/null 2>&1; then
+		[ -x /etc/init.d/quickstart ] && timeout 5 /etc/init.d/quickstart start >/dev/null 2>&1
+	fi
+	# bounded: a stuck daemon must not pile up hotplug workers
+	timeout 5 /usr/sbin/quickstart blockChange
+	;;
+esac
+
+exit 0

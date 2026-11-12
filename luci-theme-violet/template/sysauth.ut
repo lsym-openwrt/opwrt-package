@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<!-- saved from url=(0014)about:internet -->
+<html lang="{{ dispatcher.lang }}">
+<head>
+	<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+	<meta name="color-scheme" content="dark">
+	<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0" name="viewport">
+	<meta name="apple-mobile-web-app-capable" content="yes">
+	<meta name="mobile-web-app-capable" content="yes">
+	<meta name="theme-color" content="#4A148C">
+	<meta name="msapplication-tap-highlight" content="no">
+	<meta name="msapplication-TileColor" content="#4A148C">
+	<meta name="application-name" content="Violet - LuCI">
+	<meta name="apple-mobile-web-app-title" content="Violet - LuCI">
+	<link rel="stylesheet" href="/luci-static/violet/style/style.css?v=1.0.1">
+	<link rel="shortcut icon" href="/luci-static/violet/favicon.ico">
+	{%
+		import { access } from 'fs';
+		let login_bg = "";
+		if (access("/www/luci-static/violet/background/login.png", 0)) {
+			login_bg = "/luci-static/violet/background/login.png";
+		} else if (access("/www/luci-static/violet/background/login.jpg", 0)) {
+			login_bg = "/luci-static/violet/background/login.jpg";
+		}
+	%}
+	{% if (login_bg != ""): %}
+	<style>
+	body {
+		background-image: url('{{ login_bg }}') !important;
+		background-size: cover !important;
+		background-position: center center !important;
+		background-repeat: no-repeat !important;
+		background-attachment: fixed !important;
+		background-color: #4A148C !important;
+	}
+	</style>
+	{% endif %}
+	<script src="{{ dispatcher.build_url('admin/translations', dispatcher.lang) }}"></script>
+	<script src="{{ resource }}/cbi.js"></script>
+
+	<title>Violet - Login</title>
+</head>
+
+<body class="lang_{{ dispatcher.lang }} node-main-login" data-page="">
+	<header>
+		<div class="fill">
+			<div class="container">
+				<span class="showSide"></span>
+				<span class="status" id="indicators"></span>
+			</div>
+		</div>
+	</header>
+
+	<script type="text/javascript" src="{{ resource }}/promis.min.js"></script>
+	<script type="text/javascript" src="{{ resource }}/luci.js"></script>
+	<script type="text/javascript">
+			L = new LuCI({"apply_rollback":90,"resource":"{{ resource }}","media":"{{ media }}","documentroot":"\/www","pollinterval":5,"apply_display":1.5,"requestpath":[],"ubuspath":"\/ubus\/","scriptname":"\/cgi-bin\/luci","dispatchpath":[],"apply_timeout":5,"apply_holdoff":4,"nodespec":{"satisfied":true,"action":{"type":"template","path":"admin_status\/index"},"order":1,"depends":{"acl":["luci-mod-status-index"]},"title":"Overview"}});
+	</script>
+	<div class="cbi-map"></div>
+<form method="post">
+	<div class='box'>
+			<div class='box-form'>
+				<div class='box-login'>
+					<label class='checkbox'>
+						{% if (fuser): %}
+							<div class="alert-message warning">
+								<p>密码错误，请重试。</p>
+							</div>
+						{% endif %}
+					</label>
+					<div class='fieldset-body' id='login_form'>
+								<p class='field'>
+							<label for='user'>
+								<label class="cbi-value-title" for="luci_username">用户名</label>
+									<input type="text" name="luci_username" id="luci_username" autocomplete="username" value="{{ entityencode(duser ?? 'root', true) }}" />
+								</label>
+							<span id='valida' class='i i-warning'></span>
+						</p>
+								<p class='field'>
+							<label for='pass'>
+								<label class="cbi-value-title" for="luci_password">密码</label>
+								<div class="cbi-value-field">
+									<input type="password" name="luci_password" id="luci_password" autocomplete="current-password"/>
+								</div></label>
+							<span id='valida' class='i i-close'></span>
+						</p>
+
+							<label class='checkbox'>
+									请输入用户名和密码。
+							</label>
+
+								<input type='submit' id='do_login' value='登录' title='登录' />
+					</div>
+				</div>
+			</div>
+	</div>
+</form>
+</body>
+</html>

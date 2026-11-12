@@ -1,0 +1,53 @@
+<%# Violet os is made from me for all .. especially for indo wrt members and fan of OpenWrt or DBAI Community
+	luci-theme-violet Copyright 2024 derisamedia <facebook.com/derisamedia>
+	Have a bug? Please create an issue here on GitHub!
+
+	luci-theme-material
+	Copyright 2015 Lutty Yang <lutty@wcan.in>
+
+		luci-theme-bootstrap:
+		Copyright 2008 Steven Barth <steven@midlink.org>
+			Copyright 2008 Jo-Philipp Wich <jow@openwrt.org>
+				Copyright 2012 David Menting <david@nut-bolt.nl>
+
+					MUI:
+					https://github.com/muicss/mui
+
+					Licensed to the public under the Apache License 2.0
+					-%>
+					<% local ver=require "luci.version"
+						-- Check if dashboard background image exists
+						local fs = require("luci.fs")
+						local dashboard_bg = ""
+						if fs.access("/www/luci-static/violet/background/dashboard.png") then
+							dashboard_bg = "/luci-static/violet/background/dashboard.png"
+						elseif fs.access("/www/luci-static/violet/background/dashboard.jpg") then
+							dashboard_bg = "/luci-static/violet/background/dashboard.jpg"
+						end
+						%>
+
+						<% if dashboard_bg ~= "" then %>
+						<style>
+							body {
+								background-image: url('<%=dashboard_bg%>') !important;
+								background-size: cover !important;
+								background-position: center center !important;
+								background-repeat: no-repeat !important;
+								background-attachment: fixed !important;
+							}
+						</style>
+						<% end %>
+
+						</div>
+						<footer class="mobile">
+							<a href="https://github.com/derisamedia/luci-theme-alpha">
+								<%=ver.luciname%> | Violet OS Theme v3.9.7-r2
+							</a>
+						</footer>
+						</div>
+						</div>
+						<script type="text/javascript">L.require('menu-violet')</script>
+						<script src="<%=media%>/app.js?v=<%=ver.luciversion%>"></script>
+						</body>
+
+						</html>
