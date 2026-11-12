@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    tags: ["v*"]        # 推送 v* 标签触发完整编译 + 自动创建 Release
     paths-ignore:
       - "**.md"
 
