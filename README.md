@@ -87,6 +87,19 @@ make package/luci-app-argon-config/compile V=s
 
 ---
 
+## 🤖 Online Builds (GitHub Actions)
+
+The repo ships a [build-packages](.github/workflows/build.yml) workflow: on push or manual trigger (`workflow_dispatch`) it builds all 16 packages for **x86_64** with the official `openwrt/gh-action-sdk`:
+
+| SDK branch | Output | Target system |
+|------------|--------|---------------|
+| `openwrt-24.10` | `.ipk` (opkg) | OpenWrt 24.10.x |
+| `openwrt-25.12` | `.apk` (APK package manager) | OpenWrt 25.12.x |
+
+Download the artifacts (`opwrt-package_x86_64-openwrt-24.10` / `opwrt-package_x86_64-openwrt-25.12`) from the Actions run page — each contains all packages plus the feed indexes (`Packages` / `APKINDEX.tar.gz`), ready to use as a custom feed. Pushing a `v*` tag automatically creates a Release with all packages attached.
+
+---
+
 ## 📄 Licenses
 
 This repository is a **collection of modified editions** of upstream open-source projects. Each package remains under its upstream license (see tables above):

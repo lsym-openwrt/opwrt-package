@@ -1,0 +1,76 @@
+name: build-packages
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+
+jobs:
+  build:
+    name: ${{ matrix.arch }}-${{ matrix.branch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch:
+          - x86_64
+        branch:
+          - openwrt-24.10   # opkg / .ipk
+          - openwrt-25.12   # apk（OpenWrt 25.12，与 24.10.8 同为官方发布分支）
+    steps:
+      - name: checkout
+        uses: actions/checkout@v6
+
+      - name: build
+        uses: openwrt/gh-action-sdk@main
+        env:
+          ARCH: ${{ matrix.arch }}-${{ matrix.branch }}
+          FEEDNAME: opwrt-package
+          PACKAGES: >-
+            meowc nikki luci-app-nikki
+            momo luci-app-momo
+            luci-app-openclash
+            quickstart luci-app-quickstart
+            luci-app-unidash
+            luci-theme-argon luci-app-argon-config
+            luci-theme-carbon luci-theme-prism luci-theme-violet
+            luci-theme-rog-red luci-theme-techblue
+          NO_REFRESH_CHECK: true
+          NO_SHFMT_CHECK: true
+          INDEX: 1
+
+      - name: upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: opwrt-package_${{ matrix.arch }}-${{ matrix.branch }}
+          path: bin/packages/${{ matrix.arch }}/opwrt-package/
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: download artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_HOST: github.com
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes
+          find artifacts -type f \( -name '*.ipk' -o -name '*.apk' \
+            -o -name 'Packages*' -o -name 'APKINDEX*' -o -name 'packages.adb' \) \
+            -print0 | xargs -0 -n 50 gh release upload "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" --clobber

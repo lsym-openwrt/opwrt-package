@@ -87,6 +87,19 @@ make package/luci-app-argon-config/compile V=s
 
 ---
 
+## 🤖 在线编译（GitHub Actions）
+
+仓库内置 [build-packages](.github/workflows/build.yml) 工作流，推送或手动触发（workflow_dispatch）后自动用官方 `openwrt/gh-action-sdk` 编译 **x86_64** 的全部 16 个包：
+
+| SDK 分支 | 产物格式 | 对应系统 |
+|----------|---------|---------|
+| `openwrt-24.10` | `.ipk`（opkg） | OpenWrt 24.10.x |
+| `openwrt-25.12` | `.apk`（APK 包管理器） | OpenWrt 25.12.x |
+
+产物在 Actions 运行页面的 Artifacts 区下载（`opwrt-package_x86_64-openwrt-24.10` / `opwrt-package_x86_64-openwrt-25.12`），内含全部 ipk/apk 与软件源索引（`Packages` / `APKINDEX.tar.gz`），可直接当作自定义软件源使用。推送 `v*` 标签会自动创建 Release 并上传全部安装包。
+
+---
+
 ## 📄 开源协议
 
 本仓库为上游开源项目的**修改版合集**，各包继续遵循其上游许可证（见总览表）：
