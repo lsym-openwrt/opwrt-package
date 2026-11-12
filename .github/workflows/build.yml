@@ -27,7 +27,8 @@ jobs:
         uses: openwrt/gh-action-sdk@main
         env:
           ARCH: ${{ matrix.arch }}-${{ matrix.branch }}
-          FEEDNAME: opwrt-package
+          # 注意：feed 名只能含字母/数字/下划线（openwrt-25.12 的 feeds 解析器不允许连字符）
+          FEEDNAME: opwrt_package
           PACKAGES: >-
             meowc nikki luci-app-nikki
             momo luci-app-momo
@@ -45,7 +46,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: opwrt-package_${{ matrix.arch }}-${{ matrix.branch }}
-          path: bin/packages/${{ matrix.arch }}/opwrt-package/
+          path: bin/packages/${{ matrix.arch }}/opwrt_package/
           if-no-files-found: error
 
   release:
