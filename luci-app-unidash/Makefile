@@ -13,7 +13,7 @@ LUCI_PKGARCH:=all
 LUCI_DEPENDS:=+luci-compat
 PKG_NAME:=luci-app-unidash
 PKG_VERSION:=1.2.2
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 
 include $(TOPDIR)/feeds/luci/luci.mk
 

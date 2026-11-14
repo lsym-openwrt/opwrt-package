@@ -1905,6 +1905,29 @@ end
         delete _pending[key];
     }
 
+    // 跨菜单导航数据缓存: 每次点击「仪表板」菜单 LuCI 会重新加载本页,
+    // 前端所有状态(图表/列表)被清空, 视觉上就是"数据全部重新加载、闪空后再填"。
+    // 这里把最近一次成功的接口响应缓存到 sessionStorage(同一标签页会话内持久、
+    // 不占任何网络/路由资源), 页面重进时先用缓存立即渲染, 再静默刷新真实数据,
+    // 做到"一直显示"且不增加路由器负担。缓存带 5 分钟 TTL, 过期自动丢弃。
+    var _CACHE_TTL = 5 * 60 * 1000;
+    function _storeSave(key, obj) {
+        try {
+            var payload = { t: Date.now(), d: obj };
+            sessionStorage.setItem('unidash_' + key, JSON.stringify(payload));
+        } catch(e) {}
+    }
+    function _storeLoad(key) {
+        try {
+            var raw = sessionStorage.getItem('unidash_' + key);
+            if (!raw) return null;
+            var payload = JSON.parse(raw);
+            if (!payload || !payload.d) return null;
+            if (Date.now() - (payload.t || 0) > _CACHE_TTL) return null;
+            return payload.d;
+        } catch(e) { return null; }
+    }
+
     function fetchDashboardCommon(){
         if (!_claim('common')) {
             return;
@@ -1914,6 +1937,7 @@ end
             if(data){
                 try {
                     var json = typeof data === 'string' ? JSON.parse(data) : data;
+                    _storeSave('common', json);
                     updateDashboardData(json);
                 } catch(e) {
                     console.error('Failed to parse dashboard data:', e);
@@ -1953,6 +1977,7 @@ end
             if(data){
                 try {
                     var json = typeof data === 'string' ? JSON.parse(data) : data;
+                    _storeSave('top', json);
                     updateUserTrafficChart(json);
                 } catch(e) {
                     console.error('Failed to parse user traffic data:', e);
@@ -1969,6 +1994,7 @@ end
                 try {
                     var json = typeof data === 'string' ? JSON.parse(data) : data;
                     if(json && json.users && Array.isArray(json.users)) {
+                        _storeSave('users', json);
                         activeUsersData = json.users;
                         cacheUsersByMac(activeUsersData);
                         renderClientList();
@@ -2739,6 +2765,7 @@ end
             if (data) {
                 try {
                     var json = typeof data === 'string' ? JSON.parse(data) : data;
+                    _storeSave('apptype', json);
                     appStatsData.hourly = json;
                     appStatsData.daily = json;
                     updateAppTypeStatsChart(json);
@@ -2800,6 +2827,42 @@ end
         });
     }
     
+
+    // 用上次会话缓存的数据立即渲染一遍, 再静默刷新真实数据:
+    // 每次点击「仪表板」菜单 LuCI 会重新加载本页并清空前端状态, 数据"从零重新加载"。
+    // 这里把最近一次成功的接口响应 (sessionStorage, 5 分钟 TTL) 先同步画出来,
+    // 用户切回菜单时看到的是上一次的数据而非"检测中/0/暂无数据", 实现"一直显示"。
+    // 纯前端缓存, 不新增任何网络请求, 不增加路由器负担。
+    function restoreCachedDashboard() {
+        var cachedCommon = _storeLoad('common');
+        if (cachedCommon) {
+            try { updateDashboardData(cachedCommon); } catch(e) {}
+        }
+        var cachedTop = _storeLoad('top');
+        if (cachedTop) {
+            try { updateUserTrafficChart(cachedTop); } catch(e) {}
+        }
+        var cachedUsers = _storeLoad('users');
+        if (cachedUsers && cachedUsers.users && Array.isArray(cachedUsers.users)) {
+            try {
+                activeUsersData = cachedUsers.users;
+                cacheUsersByMac(activeUsersData);
+                renderClientList();
+            } catch(e) {}
+        }
+        var cachedApp = _storeLoad('apptype');
+        if (cachedApp) {
+            try {
+                appStatsData.hourly = cachedApp;
+                appStatsData.daily = cachedApp;
+                updateAppTypeStatsChart(cachedApp);
+            } catch(e) {}
+        }
+    }
+    // 推迟到整个脚本同步执行完 (所有 var 声明/函数定义就位) 再渲染缓存,
+    // 避免引用到尚未初始化的变量。setTimeout 0 保证先于首个 XHR 回调执行,
+    // 因此缓存数据一定先显示, 之后被真实数据覆盖。
+    setTimeout(restoreCachedDashboard, 0);
 
     fetchDashboardCommon();
     fetchDashboardData();
