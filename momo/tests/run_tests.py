@@ -765,16 +765,21 @@ def test_ruleset_mirrors(s, env):
     log_path = str((SB / "var/run/momo/curl_speed.log").resolve()).replace("\\", "/")
     tpl = str((SB / "etc/momo/converter/momo-base.json").resolve()).replace("\\", "/")
     conf = str((SB / "etc/momo/converter/converter.conf").resolve()).replace("\\", "/")
+    # 镜像缓存必须锁进沙箱：默认路径 /etc/momo/... 在开发机会落到盘根并跨运行残留，
+    # 后续用例会走 decision=cached 短路，探测断言（calls 数 / 失败记录）全部失真
+    cache_path = str((SB / "etc/momo/converter/ruleset_mirror.cache").resolve()).replace("\\", "/")
     base = dict(env)
     base.update({
         "MOMO_CONVERTER_RULESET": "1",
         "MOMO_CONVERTER_RULESET_CURL": "%s %s" % (PY, stub_py),
         "MOMO_CONVERTER_RULESET_MIN_SPEED": "80",
         "MOMO_CONVERTER_RULESET_TIMEOUT": "2",
+        "MOMO_CONVERTER_RULESET_CACHE": cache_path,
         "MOMO_CURL_SPEED_LOG": log_path,
     })
 
-    def convert(hostmap, extra=None, template=None, fixture="nodes_uri.txt"):
+    def convert(hostmap, extra=None, template=None, fixture="nodes_uri.txt",
+                clear_cache=True):
         e = dict(base)
         e["MOMO_CURL_SPEED_MAP"] = json.dumps(hostmap, ensure_ascii=False)
         if extra:
@@ -785,6 +790,11 @@ def test_ruleset_mirrors(s, env):
         log = Path(log_path)
         if log.exists():
             log.unlink()
+        # 用例间隔离镜像缓存；clear_cache=False 供缓存复用类用例观察真实缓存行为
+        if clear_cache:
+            cache = Path(e["MOMO_CONVERTER_RULESET_CACHE"])
+            if cache.exists():
+                cache.unlink()
         p = subprocess.run([PY, str(SB / "etc/momo/scripts/momo_convert.py"),
                             "-i", str(FIX / fixture), "-o", str(out),
                             "--template", template or tpl, "--conf", conf],
@@ -921,18 +931,18 @@ def test_ruleset_mirrors(s, env):
            and chk.get("rc") == 0),
           "离线保底不改写已有规则集、不注入 http_clients，配置仍可 check (rc=%s)" % chk.get("rc"))
 
-    # 8) 单个探测超时不拖垮整体，且有超时上限
+    # 8) 单个慢镜像不拖垮整体：被超时上限或「达标即停」提前终止处置，绝不进候选
     timeout_map = dict(all_fast)
     timeout_map["ghfast.top"] = {"elapsed": 9.0, "bytes": 57456, "code": 206}
     t0 = time.time()
     p, rep, cfg, _, _ = convert(timeout_map, extra={"MOMO_CONVERTER_RULESET_TIMEOUT": "1"})
     spent = time.time() - t0
-    failed = [x for x in rep.get("ruleset", {}).get("probes", []) if not x.get("ok")]
+    probes_by = dict((x["name"], x) for x in rep.get("ruleset", {}).get("probes", []))
+    g = probes_by.get("ghfast", {})
     s.add("rs_probe_timeout_capped",
-          (p.returncode == 0 and spent < 4.0 and len(failed) == 1
-           and failed[0]["name"] == "ghfast"
+          (p.returncode == 0 and spent < 4.0 and not g.get("ok") and bool(g.get("error"))
            and rep.get("ruleset", {}).get("mirror") == "testingcf"),
-          "单个镜像 8s 超时上限生效，其余源正常选源 (总耗时 %.2fs)" % spent)
+          "慢镜像被处置(%s)，其余源正常选源 (总耗时 %.2fs)" % (g.get("error"), spent))
 
     # 8b) HTTP 200 但是劫持页（无 .srs 文件头）：不得当成最快源
     hijack = dict(all_fast)
@@ -966,6 +976,24 @@ def test_ruleset_mirrors(s, env):
           (p.returncode == 0 and not probes.get("ghfast", {}).get("ok")
            and "退出码 63" in probes.get("ghfast", {}).get("error", "")),
           "超过 80KB 的响应被 --max-filesize 拦截，4 路并发不会写爆路由器 tmpfs")
+
+    # 8e) 镜像缓存命中：只探测缓存镜像并直接复用（二次启动提速的关键路径）
+    p, rep, cfg, calls, _ = convert(all_fast)          # 首轮选源并写缓存
+    p, rep, cfg, calls, _ = convert(all_fast, clear_cache=False)
+    r = rep.get("ruleset", {})
+    s.add("rs_cache_reuse",
+          (p.returncode == 0 and r.get("decision") == "cached"
+           and r.get("mirror") == "testingcf" and len(calls) == 1),
+          "缓存命中时只探测上次选中的镜像并直接复用 (calls=%d)" % len(calls))
+
+    # 8f) 缓存镜像跌破门限：回退全量探测重新选源
+    p, rep, cfg, calls, _ = convert(all_fast)          # 重新预热缓存
+    p, rep, cfg, calls, _ = convert(fastest_slow, clear_cache=False)
+    r = rep.get("ruleset", {})
+    s.add("rs_cache_stale_fallback",
+          (p.returncode == 0 and r.get("decision") == "fastest-qualified"
+           and r.get("mirror") == "fastly" and len(calls) == 5),
+          "缓存镜像不达标时全量重探并改选 fastly (calls=%d)" % len(calls))
 
     # 9) 关闭开关：完全不探测、配置无 rule_set
     p, rep, cfg, calls, _ = convert(all_fast, extra={"MOMO_CONVERTER_RULESET": "0"})
