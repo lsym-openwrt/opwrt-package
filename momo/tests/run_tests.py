@@ -1586,7 +1586,7 @@ def main():
 
     # 列表项的第一个键本身是嵌套 mapping（`- reality-opts:` 换行接 public-key），
     # 后面的兄弟键与键同列。旧实现只认「子块是序列」，这条及其后所有同层条目
-    # 都会被判成脏数据丢掉（kitty 32 条只剩 10 条）。
+    # 都会被判成脏数据丢掉（某订阅 32 条只剩 10 条）。
     nf_nodes, nf_fmt, nf_groups = nodes_of("clash_nested_first.yaml")
     nf_reality = [(n.get("tls") or {}).get("reality") or {} for n in nf_nodes]
     s.add("yaml_nested_first_key",
@@ -1729,6 +1729,63 @@ def main():
           "Clash 的 plugin: obfs + {mode,host} 翻译成 sing-box obfs-local 的 "
           "obfs=/obfs-host=，键名不同不再直接透传",
           {"node": clash_plugin})
+
+    # utls 指纹：未显式写 client-fingerprint 时不应强制启用（与 Mihomo 默认一致），
+    # 避免给没写指纹的节点硬加 chrome 指纹导致握手变慢/被限速/拒绝（延迟偏大）。
+    vm_no_fp = conv.clash_to_singbox({
+        "name": "VM", "type": "vmess", "server": "a.example.com", "port": 443,
+        "uuid": "x", "cipher": "auto", "alterId": 0, "tls": True,
+        "servername": "a.example.com",
+    })
+    vm_fp = conv.clash_to_singbox({
+        "name": "VM2", "type": "vmess", "server": "a.example.com", "port": 443,
+        "uuid": "x", "cipher": "auto", "alterId": 0, "tls": True,
+        "servername": "a.example.com", "client-fingerprint": "chrome",
+    })
+    s.add("clash_utls_only_when_explicit",
+          "utls" not in (vm_no_fp.get("tls") or {})
+          and (vm_fp.get("tls") or {}).get("utls") == {"enabled": True, "fingerprint": "chrome"},
+          "未写 client-fingerprint 不加 utls；显式 chrome 才启用（与 Mihomo 默认一致）",
+          {"no_fp_tls": vm_no_fp.get("tls"), "fp_tls": vm_fp.get("tls")})
+
+    # client-fingerprint: none 显式关闭指纹，不落 utls
+    vm_none = conv.clash_to_singbox({
+        "name": "VM3", "type": "vmess", "server": "a.example.com", "port": 443,
+        "uuid": "x", "cipher": "auto", "alterId": 0, "tls": True,
+        "servername": "a.example.com", "client-fingerprint": "none",
+    })
+    s.add("clash_utls_none_disabled",
+          "utls" not in (vm_none.get("tls") or {}),
+          "client-fingerprint: none 表示关闭指纹，不落 utls")
+
+    # sing-box 1.14 的 reality 客户端强制要求 uTLS（内核报错：uTLS is required by
+    # reality client），reality 节点必须带 utls，否则整份配置被内核拒绝。
+    vl_reality = conv.clash_to_singbox({
+        "name": "VL", "type": "vless", "server": "c.example.com", "port": 443,
+        "uuid": "x", "tls": True, "client-fingerprint": "chrome",
+        "reality-opts": {"public-key": "abc", "short-id": "abcd"},
+    })
+    vl_tls = vl_reality.get("tls") or {}
+    s.add("clash_reality_requires_utls",
+          (vl_tls.get("utls") or {}).get("enabled") is True
+          and (vl_tls.get("reality") or {}).get("enabled") is True
+          and (vl_tls.get("reality") or {}).get("public_key") == "abc",
+          "reality 节点必须带 utls（内核强制），reality 公钥/short-id 保留",
+          {"tls": vl_tls})
+
+    # vmess over reality：仅判断 tls 会丢 reality-opts，需按 reality-opts/servername 兜底
+    vm_reality = conv.clash_to_singbox({
+        "name": "VMR", "type": "vmess", "server": "c.example.com", "port": 443,
+        "uuid": "x", "cipher": "auto", "alterId": 0, "servername": "real.example.com",
+        "reality-opts": {"public-key": "abc"},
+    })
+    vm_rt = vm_reality.get("tls") or {}
+    s.add("clash_vmess_reality_mapped",
+          (vm_rt.get("reality") or {}).get("enabled") is True
+          and vm_rt.get("server_name") == "real.example.com"
+          and (vm_rt.get("utls") or {}).get("enabled") is True,
+          "vmess 带 reality-opts 时正确生成 tls+reality+utls，不再因只判 tls 而丢失",
+          {"tls": vm_rt})
 
     try:
         conv.extract_nodes(b"just some random text\n", {}, allow_providers=False)

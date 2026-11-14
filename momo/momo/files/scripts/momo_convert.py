@@ -432,10 +432,17 @@ def build_basic_tls(server, sni, insecure, alpn=None):
     return tls
 
 
+# Mihomo 的 client-fingerprint 缺省为空 = 不伪造 TLS 指纹；"none" 显式关闭。
+# sing-box 的 utls 官方标注不推荐且默认禁用，这里只在显式给出有效指纹时才启用，
+# 避免把「没写指纹」的节点强行加 chrome 指纹，导致握手变慢/被服务端限速/拒绝。
+UTLS_DISABLE_WORDS = {"none", "disable", "disabled", "off", "false", "0", ""}
+
+
 def build_utls_tls(server, sni, fingerprint, insecure, alpn=None):
     tls = build_basic_tls(server, sni, insecure, alpn)
-    fp = (fingerprint or "").strip() or "chrome"
-    tls["utls"] = {"enabled": True, "fingerprint": fp}
+    fp = (fingerprint or "").strip().lower()
+    if fp and fp not in UTLS_DISABLE_WORDS:
+        tls["utls"] = {"enabled": True, "fingerprint": fp}
     return tls
 
 
@@ -588,9 +595,11 @@ def parse_vless_uri(uri):
         elif str(q.get("tls") or "").strip().lower() in ("1", "true", "tls", "reality"):
             security = "tls"
     sni = query_get(q, "sni", "servername")
-    fp = query_get(q, "fp") or "chrome"
+    fp = query_get(q, "fp")
     if security == "reality":
-        tls = build_utls_tls(u["host"], sni, fp, False)
+        # sing-box 1.14 的 reality 客户端强制要求 uTLS（内核报错：uTLS is required by
+        # reality client）。reality 的 ClientHello 伪装正是靠 uTLS 引擎生成，指纹缺省 chrome。
+        tls = build_utls_tls(u["host"], sni, fp or "chrome", False)
         reality = {"enabled": True}
         pbk = normalize_public_key(query_get(q, "pbk"))
         sid = normalize_short_id(query_get(q, "sid"))
@@ -622,7 +631,7 @@ def parse_trojan_uri(uri):
     node = {
         "tag": u["tag"], "type": "trojan", "server": u["host"],
         "server_port": u["port"], "password": u["user"],
-        "tls": build_utls_tls(u["host"], sni, "chrome",
+        "tls": build_utls_tls(u["host"], sni, query_get(q, "fp"),
                               insecure_from_query(q), query_get(q, "alpn") or None),
     }
     transport = transport_from_query(q)
@@ -819,7 +828,7 @@ def parse_trojan_go_uri(uri):
     q = u["query"]
     node = {"tag": u["tag"], "type": "trojan", "server": u["host"],
             "server_port": u["port"], "password": u["user"],
-            "tls": build_utls_tls(u["host"], query_get(q, "sni", "peer"), "chrome",
+            "tls": build_utls_tls(u["host"], query_get(q, "sni", "peer"), query_get(q, "fp"),
                                   insecure_from_query(q), query_get(q, "alpn") or None)}
     transport = transport_from_query(q)
     if transport:
@@ -882,7 +891,9 @@ def parse_vmess_uri(uri):
         alpn = v.get("alpn")
         if isinstance(alpn, list):
             alpn = ",".join(str(x) for x in alpn)
-        node["tls"] = build_utls_tls(server, sni, "chrome", bool(insecure), alpn)
+        # 仅当显式给了 fp 才启用 utls，避免给没写指纹的节点硬加 chrome 指纹
+        node["tls"] = build_utls_tls(server, sni, str(v.get("fp") or ""),
+                                     bool(insecure), alpn)
     net = str(v.get("net") or "").strip().lower()
     path = str(v.get("path") or "")
     vhost = str(v.get("host") or "")
@@ -1556,12 +1567,18 @@ def clash_transport(proxy):
 def clash_tls(proxy, server, fingerprint=None, with_utls=True):
     insecure, alpn = clash_tls_flags(proxy)
     sni = str(proxy.get("sni") or proxy.get("servername") or "")
-    if with_utls:
-        tls = build_utls_tls(server, sni, str(proxy.get("client-fingerprint") or fingerprint or "chrome"),
-                             insecure, alpn)
+    reality = proxy.get("reality-opts")
+    fp = str(proxy.get("client-fingerprint") or fingerprint or "")
+    if isinstance(reality, dict):
+        # sing-box 1.14 的 reality 客户端强制要求 uTLS（内核报错：uTLS is required by
+        # reality client），reality 的 ClientHello 伪装靠 uTLS 引擎生成，指纹缺省 chrome。
+        tls = build_utls_tls(server, sni, fp or "chrome", insecure, alpn)
+    elif with_utls and fp:
+        # 普通 TLS：只在显式写了 client-fingerprint 时才启用 uTLS，
+        # 没写就与 Mihomo 默认一致（不伪造），避免握手变慢/被限速。
+        tls = build_utls_tls(server, sni, fp, insecure, alpn)
     else:
         tls = build_basic_tls(server, sni, insecure, alpn)
-    reality = proxy.get("reality-opts")
     if isinstance(reality, dict):
         r = {"enabled": True}
         if reality.get("public-key"):
@@ -1627,7 +1644,9 @@ def clash_to_singbox(proxy):
         node = dict(base, type="vmess", uuid=str(proxy["uuid"]),
                     security=normalize_vmess_security(proxy.get("cipher")),
                     alter_id=int(proxy.get("alterId") or 0))
-        if proxy.get("tls"):
+        # vmess 同样支持 reality（Mihomo 的 vmess over reality）：仅判断 tls 会
+        # 丢掉 reality-opts / servername，导致这类节点无 TLS 而连接失败。
+        if proxy.get("tls") or proxy.get("reality-opts") or proxy.get("servername"):
             node["tls"] = clash_tls(proxy, server)
     elif typ == "vless":
         if not proxy.get("uuid"):
@@ -1826,6 +1845,22 @@ REGION_FILTER_ALIASES = {
 }
 
 
+def _move_inline_flags(body):
+    """把散落在表达式中间的全局内联标志 (?i)(?m)(?s) 移到开头。
+
+    mihomo（Go regexp）允许内联标志出现在任意位置，Python 的 re 却要求
+    全局标志必须在表达式开头，否则抛「global flags not at the start」。
+    机场地区 filter 几乎都写成 ``(?=.*(香港|…|(?i)Hong))…`` 这种，直接
+    compile 会失败并误走关键字降级（永远不命中 -> 回退全量节点）。
+    """
+    inline = re.findall(r"\(\?[ims]+\)", body)
+    if not inline:
+        return body, False
+    body2 = re.sub(r"\(\?[ims]+\)", "", body)
+    letters = "".join(sorted(set("".join(re.findall(r"[ims]", "".join(inline))))))
+    return "(?" + letters + ")" + body2, True
+
+
 def filter_terms(pattern):
     """解析 mihomo filter/exclude-filter -> [(compiled_regex, None) | (None, keyword)]。"""
     terms = []
@@ -1845,6 +1880,14 @@ def filter_terms(pattern):
             continue
         except re.error:
             pass
+        # Go regexp 允许内联标志在任意位置，Python re 不允许：先移动再试一次。
+        moved, changed = _move_inline_flags(body)
+        if changed:
+            try:
+                terms.append((re.compile(moved, flags), None))
+                continue
+            except re.error:
+                pass
         kw = body.strip("*").strip().lower()
         if not kw:
             continue
@@ -1890,9 +1933,17 @@ def resolve_group_members(groups, name_map, tag_map, node_tags):
     node_set = set(node_tags)
     for g in groups:
         raw = list(g["members_raw"])
-        if g["include_all"]:
+        # 触发 filter 筛选的两种形态：
+        #   1) include-all（含 include-all-proxies/providers）：全部节点 + filter
+        #   2) use 引用 provider（如 use: [Airport-1, Airport-2]）+ filter：
+        #      provider 节点已平铺进 node_tags，provider 名本身无法匹配节点，
+        #      若不筛就会因为 members 为空而 fallback 全量。mihomo 语义下
+        #      use+filter 就是从这些 provider 的节点里按 filter 筛，这里等价
+        #      于「全部节点 + filter」。
+        has_filter = bool(g.get("filter") or g.get("exclude_filter"))
+        if g["include_all"] or has_filter:
             pool = list(node_tags)
-            # include-all + filter：按 mihomo 语义筛选节点；全不命中时回退全量
+            # include-all / use + filter：按 mihomo 语义筛选节点；全不命中时回退全量
             # （与 mihomo filter 编译失败的行为一致，绝不让组变空）
             terms = filter_terms(g.get("filter"))
             if terms:
@@ -2104,7 +2155,7 @@ def fetch_provider_bodies(urls, conf, ua_map=None):
     for url, path in pending:
         out = path + ".part"
         ua = str(ua_map.get(url) or default_ua)
-        cmd = [curl, "-s", "-f", "-m", str(timeout), "--connect-timeout", "5",
+        cmd = [curl, "-s", "-f", "-m", str(timeout), "--connect-timeout", "3",
                "-L", "-A", ua, "-o", out, url]
         try:
             procs.append((url, path, out, subprocess.Popen(
@@ -2280,7 +2331,7 @@ def text_profile_tls(host, kv, utls=True, default_insecure=False):
         insecure = not bool_arg(kv.get("tls-verification"), True)
     alpn = kv.get("alpn") or None
     if utls:
-        return build_utls_tls(host, sni, kv.get("client-fingerprint") or "chrome", insecure, alpn)
+        return build_utls_tls(host, sni, kv.get("client-fingerprint") or "", insecure, alpn)
     return build_basic_tls(host, sni, insecure, alpn)
 
 
@@ -2867,7 +2918,10 @@ def normalize_nodes(nodes, resolver_tag="dns_resolver", tag_map=None, conf=None)
         node["server"] = server
         node["server_port"] = port
         if not is_ip_literal(server) and "domain_resolver" not in node:
-            node["domain_resolver"] = {"server": resolver_tag, "strategy": "ipv4_only"}
+            # 节点域名必须用真实 DNS 解析（否则 fake-ip 会返回假 IP 导致连不上）。
+            # strategy 用 prefer_ipv4 与模板 dns.strategy 一致：优先 IPv4，且 IPv4
+            # 不可用时能回退 IPv6，避免纯 IPv6 节点解析失败 -> 测速无结果/延迟异常。
+            node["domain_resolver"] = {"server": resolver_tag, "strategy": "prefer_ipv4"}
         result.append(node)
     return result, skipped
 
@@ -2983,17 +3037,71 @@ def parse_probe_output(text):
         return None
 
 
-def probe_mirrors(conf):
-    """4 个镜像并行探测；任何异常都只记录为失败，绝不抛给转换主流程。"""
+def _finalize_probe(item, proc, out_path):
+    """收集单个 curl 进程结果并校验，返回更新后的 item（不负责 kill）。
+
+    调用前提是 proc.poll() 已确认进程退出，因此这里用阻塞 communicate()
+    一次性读尽 stdout/stderr（进程已结束，数据必然可读，不会卡住）。
+    """
+    try:
+        stdout, stderr = proc.communicate()
+    except OSError as exc:
+        item["error"] = "curl 通信失败: %s" % exc
+        return item
+    rc = proc.returncode
+    if rc != 0:
+        item["error"] = "curl 退出码 %d: %s" % (
+            rc, stderr.decode("utf-8", "replace").strip()[:120])
+        return item
+    meta = parse_probe_output(stdout.decode("utf-8", "replace"))
+    if not meta:
+        item["error"] = (stderr.decode("utf-8", "replace").strip()
+                         or "curl 未返回测速数据")[:160]
+        return item
+    item["http_code"] = meta["http_code"]
+    try:
+        with open(out_path, "rb") as f:
+            head = f.read(3)
+        real_bytes = os.path.getsize(out_path)
+    except OSError:
+        head, real_bytes = b"", 0
+    item["bytes"] = real_bytes
+    item["seconds"] = meta["seconds"]
+    if meta["http_code"] not in (200, 206):
+        item["error"] = "HTTP %d" % meta["http_code"]
+    elif real_bytes < MIN_PROBE_BYTES:
+        item["error"] = "响应内容不足 %d 字节" % MIN_PROBE_BYTES
+    elif real_bytes > PROBE_MAX_BYTES:
+        item["error"] = "响应超过 %d 字节（镜像忽略了 Range）" % PROBE_MAX_BYTES
+    elif head != SRS_MAGIC:
+        item["error"] = "不是 .srs 规则集（疑似劫持页/错误页）"
+    elif meta["seconds"] <= 0:
+        item["error"] = "耗时为 0"
+    else:
+        item["speed_kbs"] = round(real_bytes / 1024.0 / meta["seconds"], 2)
+        item["ok"] = True
+    return item
+
+
+def probe_mirrors(conf, min_speed=DEFAULT_MIN_SPEED, only=None):
+    """4 个镜像并行探测；达标即停，绝不等待慢镜像/超时镜像拖累启动。
+
+    任意镜像速度 >= min_speed 即提前终止其余探测（杀进程回收），
+    避免 ghfast 之类不可达源把整个规则集探测拖满超时时间。
+    only 指定时只探测该镜像（缓存命中路径），可省去其余镜像的网络往返。
+    """
     timeout = clamp_int(conf.get("MOMO_CONVERTER_RULESET_TIMEOUT"),
                         DEFAULT_PROBE_TIMEOUT, 1, 30)
     curl_cmd = str(conf.get("MOMO_CONVERTER_RULESET_CURL") or "curl").split()
-    results, jobs = [], []
     try:
         tmpdir = tempfile.mkdtemp(prefix="momo-rs-")
     except OSError:
         tmpdir = None
-    for m in RULESET_MIRRORS:
+    mirrors = [m for m in RULESET_MIRRORS
+               if only is None or m["name"] == only] or RULESET_MIRRORS
+    jobs = []          # 仍在运行/待收集的进程
+    results = []       # 已完成（成功或失败）的 item
+    for m in mirrors:
         url = mirror_url(m, "geosite")
         out_path = os.path.join(tmpdir, m["name"] + ".part") if tmpdir else os.devnull
         item = {"name": m["name"], "host": m["host"], "probe_url": url,
@@ -3006,73 +3114,64 @@ def probe_mirrors(conf):
             item["error"] = "curl 启动失败: %s" % exc
             results.append(item)
             continue
-        jobs.append((item, proc, out_path))
+        jobs.append([item, proc, out_path])
 
     deadline = time.time() + timeout + 1
-    for item, proc, out_path in jobs:
-        try:
-            stdout, stderr = proc.communicate(timeout=max(0.05, deadline - time.time()))
-            rc = proc.returncode
-        except subprocess.TimeoutExpired:
+    try:
+        while jobs:
+            # 每 50ms 轮询一次各进程是否退出，直到有镜像达标或全部结束
+            for j in jobs[:]:
+                item, proc, out_path = j
+                if proc.poll() is None:
+                    continue
+                jobs.remove(j)
+                done = _finalize_probe(item, proc, out_path)
+                if done is not None:
+                    results.append(done)
+            if not jobs:
+                break
+            if any(r.get("ok") and r["speed_kbs"] >= min_speed for r in results):
+                # 已达标：kill 剩余慢镜像，立即返回
+                for item, proc, out_path in jobs:
+                    try:
+                        proc.kill()
+                        proc.communicate()
+                    except OSError:
+                        pass
+                    item["error"] = "已达标，跳过（提前终止）"
+                    results.append(item)
+                jobs = []
+                break
+            if time.time() >= deadline:
+                for item, proc, out_path in jobs:
+                    try:
+                        proc.kill()
+                        proc.communicate()
+                    except OSError:
+                        pass
+                    item["error"] = "探测超时 (>%ds)" % timeout
+                    results.append(item)
+                jobs = []
+                break
+            time.sleep(0.05)
+    finally:
+        for item, proc, out_path in jobs:
+            if proc.poll() is None:
+                try:
+                    proc.kill()
+                    proc.communicate()
+                except OSError:
+                    pass
+        if tmpdir:
+            for name in (m["name"] for m in mirrors):
+                try:
+                    os.unlink(os.path.join(tmpdir, name + ".part"))
+                except OSError:
+                    pass
             try:
-                proc.kill()
-                proc.communicate()
+                os.rmdir(tmpdir)
             except OSError:
                 pass
-            item["error"] = "探测超时 (>%ds)" % timeout
-            results.append(item)
-            continue
-        except OSError as exc:
-            item["error"] = "curl 通信失败: %s" % exc
-            results.append(item)
-            continue
-        # curl 超时/写盘失败/收到不完整响应时仍可能输出 -w，必须先看退出码
-        if rc != 0:
-            item["error"] = "curl 退出码 %d: %s" % (
-                rc, stderr.decode("utf-8", "replace").strip()[:120])
-            results.append(item)
-            continue
-        meta = parse_probe_output(stdout.decode("utf-8", "replace"))
-        if not meta:
-            item["error"] = (stderr.decode("utf-8", "replace").strip()
-                             or "curl 未返回测速数据")[:160]
-            results.append(item)
-            continue
-        item["http_code"] = meta["http_code"]
-        # 只认实际落盘的文件：校验大小区间与 .srs 文件头，识别劫持页/错误页
-        try:
-            with open(out_path, "rb") as f:
-                head = f.read(3)
-            real_bytes = os.path.getsize(out_path)
-        except OSError:
-            head, real_bytes = b"", 0
-        item["bytes"] = real_bytes
-        item["seconds"] = meta["seconds"]
-        if meta["http_code"] not in (200, 206):
-            item["error"] = "HTTP %d" % meta["http_code"]
-        elif real_bytes < MIN_PROBE_BYTES:
-            item["error"] = "响应内容不足 %d 字节" % MIN_PROBE_BYTES
-        elif real_bytes > PROBE_MAX_BYTES:
-            item["error"] = "响应超过 %d 字节（镜像忽略了 Range）" % PROBE_MAX_BYTES
-        elif head != SRS_MAGIC:
-            item["error"] = "不是 .srs 规则集（疑似劫持页/错误页）"
-        elif meta["seconds"] <= 0:
-            item["error"] = "耗时为 0"
-        else:
-            item["speed_kbs"] = round(real_bytes / 1024.0 / meta["seconds"], 2)
-            item["ok"] = True
-        results.append(item)
-
-    if tmpdir:
-        for _, _, out_path in jobs:
-            try:
-                os.unlink(out_path)
-            except OSError:
-                pass
-        try:
-            os.rmdir(tmpdir)
-        except OSError:
-            pass
     return results
 
 
@@ -3095,6 +3194,51 @@ def choose_ruleset_mirror(results, min_speed):
     mirror = next((m for m in RULESET_MIRRORS if m["name"] == picked["name"]), fallback)
     return {"mirror": mirror, "decision": decision, "selected": picked,
             "ranked": ok, "inject": True, "rewrite": True}
+
+
+def _mirror_cache_path(conf):
+    p = str(conf.get("MOMO_CONVERTER_RULESET_CACHE") or "").strip()
+    return p or "/etc/momo/converter/ruleset_mirror.cache"
+
+
+def _mirror_cache_ttl(conf):
+    return clamp_int(conf.get("MOMO_CONVERTER_RULESET_CACHE_TTL"), 3600, 0, 86400 * 7)
+
+
+def read_mirror_cache(conf):
+    """返回未过期的缓存镜像名；无缓存/过期/损坏一律返回 None。"""
+    ttl = _mirror_cache_ttl(conf)
+    if ttl <= 0:
+        return None
+    path = _mirror_cache_path(conf)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            name = f.read().strip()
+        age = time.time() - os.path.getmtime(path)
+        if name and age < ttl:
+            return name
+    except OSError:
+        return None
+    return None
+
+
+def write_mirror_cache(conf, name):
+    """记录本次选中的镜像，供下次启动优先复用。失败静默忽略。"""
+    if not name:
+        return
+    ttl = _mirror_cache_ttl(conf)
+    if ttl <= 0:
+        return
+    path = _mirror_cache_path(conf)
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=".momo-rs-cache-",
+                                   dir=os.path.dirname(os.path.abspath(path)) or ".")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(name)
+        os.replace(tmp, path)
+    except OSError:
+        pass
 
 
 def apply_ruleset_mirrors(cfg, mirror, inject, rewrite=True):
@@ -3160,9 +3304,31 @@ def prepare_ruleset(conf):
     state["enabled"] = True
     state["min_speed"] = clamp_int(conf.get("MOMO_CONVERTER_RULESET_MIN_SPEED"),
                                    DEFAULT_MIN_SPEED, 1, 100000)
-    state["probes"] = probe_mirrors(conf)
+    # 缓存命中：先只探测上次选中的镜像，达标直接复用，省去其余镜像的往返
+    cached = read_mirror_cache(conf)
+    if cached:
+        cached_probes = probe_mirrors(conf, state["min_speed"], only=cached)
+        cached_ok = next((p for p in cached_probes if p.get("ok")), None)
+        if cached_ok and cached_ok["speed_kbs"] >= state["min_speed"]:
+            state["probes"] = cached_probes
+            state["decision"] = "cached"
+            state["mirror"] = cached
+            state["selected"] = cached_ok
+            state["ranked"] = [{"name": cached_ok["name"],
+                                "seconds": cached_ok["seconds"],
+                                "speed_kbs": cached_ok["speed_kbs"]}]
+            state["inject"] = flag_enabled(
+                conf.get("MOMO_CONVERTER_RULESET_INJECT"), True)
+            state["rewrite"] = True
+            state["_mirror"] = next(
+                (m for m in RULESET_MIRRORS if m["name"] == cached),
+                RULESET_MIRRORS[0])
+            return state
+    state["probes"] = probe_mirrors(conf, state["min_speed"])
     choice = choose_ruleset_mirror(state["probes"], state["min_speed"])
     force = flag_enabled(conf.get("MOMO_CONVERTER_RULESET_FORCE"), False)
+    if choice.get("selected"):
+        write_mirror_cache(conf, choice["selected"]["name"])
     state["decision"] = choice["decision"]
     state["mirror"] = choice["mirror"]["name"]
     state["selected"] = choice["selected"]
@@ -4419,7 +4585,7 @@ def ensure_route(cfg, template, resolver):
         rules.insert(pos, {"inbound": ["dns-in"], "action": "resolve"})
         notes.append("补充 dns-in 解析规则")
     if resolver and not isinstance(route.get("default_domain_resolver"), (dict, str)):
-        route["default_domain_resolver"] = {"server": resolver, "strategy": "ipv4_only"}
+        route["default_domain_resolver"] = {"server": resolver, "strategy": "prefer_ipv4"}
         notes.append("补充 default_domain_resolver -> %s" % resolver)
 
     # final 悬空时按现有 outbound 兜底，绝不留指向不存在 tag 的 final
@@ -4795,6 +4961,8 @@ def load_conf(path):
         "MOMO_CONVERTER_RULESET_CURL": "curl",
         "MOMO_CONVERTER_RULESET_INJECT": "1",
         "MOMO_CONVERTER_RULESET_FORCE": "0",
+        "MOMO_CONVERTER_RULESET_CACHE": "/etc/momo/converter/ruleset_mirror.cache",
+        "MOMO_CONVERTER_RULESET_CACHE_TTL": "3600",
         # proxy-providers：Mihomo 模板从远程订阅拉取节点（并行下载 + 持久缓存）
         # 原生 sing-box 订阅缺少 momo 必需 inbound/fakeip DNS 时自动补齐
         "MOMO_CONVERTER_REPAIR": "1",

@@ -127,7 +127,7 @@
     "auto_detect_interface": true,
     "default_domain_resolver": {
       "server": "dns_resolver",
-      "strategy": "ipv4_only"
+      "strategy": "prefer_ipv4"
     }
   },
   "experimental": {
