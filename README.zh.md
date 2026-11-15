@@ -26,12 +26,11 @@
 | **luci-app-unidash**      | 通用 OpenWrt 仪表盘     | 移植自 [fanchmwrt/fanchmwrt-packages](https://github.com/fanchmwrt/fanchmwrt-packages) 的 luci-app-fwx-dashboard                              | 1.2.2           | ① 数据源全部改为 /proc、ubus、conntrack、dhcp.leases ② 新增中英双语 i18n（150+ 词条）③ 请求记忆化 + 2s 缓存 + 防堆积 ④ dnsd 双模式 DNS 采集增强    | **无需 fwxd / kmod-fwx 私有组件**即可在任意 OpenWrt 运行；一轮轮询 0.85s → 0.53s（**-37%**）；站点连接显示中文名                     | Apache-2.0 |
 | **luci-app-argon-config** | Argon 主题设置插件      | [jerrykuku/luci-app-argon-config](https://github.com/jerrykuku/luci-app-argon-config)                                                         | v1.0 独立版时代 | ① 默认配色改翡翠绿（`#10b981`/`#047857`）② blur 10→0、透明度 0.5→0.3 ③ 新增 GHSer 壁纸源 ④ rpcd 可用空间查询改走 system info                       | Argon 开箱即**翡翠绿**观感                                                                                                           | Apache-2.0 |
 
-### 主题（6 个）
+### 主题（5 个）
 
 | 包名                    | 风格                | 基于谁修改                                                                                                  | 版本            | 修改了什么                                                                                                                                     | 实现了什么                                                                      | 许可证     |
 | ----------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ---------- |
 | **luci-theme-argon**    | 经典侧边栏          | [jerrykuku/luci-theme-argon](https://github.com/jerrykuku/luci-theme-argon)                                 | v2.3.2          | 按钮圆角 `2px`→`1rem`、登录输入框圆角 `0`→`1rem`（less 同步改）                                                                                | 视觉更圆润，其余与上游完全一致                                                  | Apache-2.0 |
-| **luci-theme-carbon**   | 苹果毛玻璃          | [mrjoechen/luci-theme-carbon](https://github.com/mrjoechen/luci-theme-carbon)                               | v1.1.4          | ① 内容区加宽 `--cb-content-wide: 1240px` ② 新增 rtp2httpd/udpxy/iptv→光纤猫图标识别 ③ listbox 分组显示 ④ 暗色 checkbox 修复（共约 300 行增强） | **IPTV / 组播场景**设备识别；宽屏布局体验                                       | Apache-2.0 |
 | **luci-theme-prism**    | 深色 Prism Dark     | derisamedia 的 [luci-theme-alpha](https://github.com/derisamedia/luci-theme-alpha) 模板                     | 3.9.7_beta2-r10 | ① 登录页中文化 ② 独立化（不依赖 alpha-config）                                                                                                 | 可独立安装使用的 Prism 深色主题                                                 | Apache-2.0 |
 | **luci-theme-violet**   | 毛玻璃深色 Violet   | derisamedia 的 [luci-theme-alpha](https://github.com/derisamedia/luci-theme-alpha) 模板                     | 3.9.7_beta2-r10 | ① 登录页中文化 ② 独立化                                                                                                                        | Violet OS 风格毛玻璃主题                                                        | Apache-2.0 |
 | **luci-theme-rog-red**  | ROG 信仰红 × 哑光黑 | [KawaiiHachimi/luci-theme-techblue](https://github.com/KawaiiHachimi/luci-theme-techblue)（上游已不可访问） | CSS v1.0.9      | 整包视觉重制：信仰红 `#FF0018`、全局直角 + clip-path 斜切、呼吸灯动画、Header CPU/内存状态条、`initDashboardTables`                            | **ROG 败家之眼**风格主题；保留 `--asus-*`/`--techblue-*` 变量兼容层便于二次换肤 | Apache-2.0 |
@@ -56,7 +55,6 @@
 ├── luci-app-unidash/         # 通用仪表盘（fwx-dashboard 移植）
 ├── luci-theme-argon/         # Argon 圆角微调版
 ├── luci-app-argon-config/    # Argon 设置插件（翡翠绿定制版）
-├── luci-theme-carbon/        # Carbon 苹果风（IPTV 增强版）
 ├── luci-theme-prism/         # Prism 深色（中文界面版）
 ├── luci-theme-violet/        # Violet 毛玻璃（中文界面版）
 ├── luci-theme-rog-red/       # ROG 信仰红
@@ -107,7 +105,7 @@ make package/luci-app-argon-config/compile V=s
 | 许可证     | 涉及的包                                                                                                                                                                        |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | GPL-3.0    | nikki、momo、quickstart（各包目录内附 [GPL-3.0](nikki/LICENSE) 全文）                                                                                                           |
-| Apache-2.0 | luci-app-quickstart、luci-app-unidash、luci-theme-argon、luci-app-argon-config、luci-theme-carbon、luci-theme-prism、luci-theme-violet、luci-theme-rog-red、luci-theme-techblue |
+| Apache-2.0 | luci-app-quickstart、luci-app-unidash、luci-theme-argon、luci-app-argon-config、luci-theme-prism、luci-theme-violet、luci-theme-rog-red、luci-theme-techblue |
 | MIT        | luci-app-openclash（遵循上游 vernesong/OpenClash 的 MIT 许可）                                                                                                                  |
 
 - 所有修改版均在包内注明上游来源，并按协议要求以相同许可证开源发布
@@ -129,7 +127,6 @@ make package/luci-app-argon-config/compile V=s
 | [istore-packages](https://github.com/linkease/istore-packages) / [quickstart](https://github.com/istoreos/quickstart)                                     | linkease、jjm2473               | quickstart、luci-app-quickstart         |
 | [fanchmwrt-packages](https://github.com/fanchmwrt/fanchmwrt-packages)（luci-app-fwx-dashboard）                                                           | fanchmwrt                       | luci-app-unidash（移植）                |
 | [luci-theme-argon](https://github.com/jerrykuku/luci-theme-argon) / [luci-app-argon-config](https://github.com/jerrykuku/luci-app-argon-config)           | jerrykuku                       | luci-theme-argon、luci-app-argon-config |
-| [luci-theme-carbon](https://github.com/mrjoechen/luci-theme-carbon)                                                                                       | mrjoechen                       | luci-theme-carbon                       |
 | [luci-theme-alpha](https://github.com/derisamedia/luci-theme-alpha)（模板）                                                                               | derisamedia                     | luci-theme-prism、luci-theme-violet     |
 | [luci-theme-techblue](https://github.com/KawaiiHachimi/luci-theme-techblue)                                                                               | KawaiiHachimi                   | luci-theme-rog-red、luci-theme-techblue |
 | [mihomo](https://github.com/MetaCubeX/mihomo) / [meowx-core](https://github.com/mmwx-group/meowx-core) / [sing-box](https://github.com/SagerNet/sing-box) | MetaCubeX、mmwx-group、SagerNet | nikki / momo 的代理内核                 |
