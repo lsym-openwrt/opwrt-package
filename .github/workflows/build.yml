@@ -37,7 +37,7 @@ jobs:
             quickstart luci-app-quickstart
             luci-app-unidash
             luci-theme-argon luci-app-argon-config
-            luci-theme-carbon luci-theme-prism luci-theme-violet
+            luci-theme-prism luci-theme-violet
             luci-theme-rog-red luci-theme-techblue
           NO_REFRESH_CHECK: true
           NO_SHFMT_CHECK: true
